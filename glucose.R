@@ -1,9 +1,12 @@
 library(tidyverse)
 library(broom)
 
+
+#========this part of the script requires local files====================================
+#========and should not be run if 'glucose_for_analysis.csv' is available================
+
 setwd("C:/Users/Evgeny/Dropbox/_projects/CQD/glucose")
 
-glucose <- read.csv("glucose_manual_data.csv", fileEncoding="UTF-8-BOM", na.strings = "n/a")
 # this is a dataset of input and response variables collected manually
 # id - sample label
 # volume - reactor volume in mL
@@ -16,7 +19,7 @@ glucose <- read.csv("glucose_manual_data.csv", fileEncoding="UTF-8-BOM", na.stri
 # yield_total - total yield of the product, %, including sediment
 # conc_filtrate - concentration of the filtrate, mg/g
 # yield_filtrate - yield of the soluble product, %
-
+glucose <- read.csv("glucose_manual_data.csv", fileEncoding="UTF-8-BOM", na.strings = "n/a")
 
 # reading absorbance spectra
 samples_list_filepath <- paste0(getwd(), "/spectra/absorbance_citrate/samples_list.txt")
@@ -28,7 +31,6 @@ spectrum_path <- paste0(getwd(), "/spectra/absorbance_citrate/")
 file_list <- list.files(path=spectrum_path, pattern = "Absorbance_\\d+\\.txt")
 
 citrate_spectra <- data.frame()
-
 
 # each spectrum is corrected for background and cut
 for (i in 1:length(file_list)){
@@ -55,7 +57,8 @@ citrate_median_spectra_by_sample <- citrate_spectra %>%
 
 # for each median spectrum, maximum Abs is saved, and the midpoint of the range corresponding to this Abs value
 citrate_by_sample_abs <- citrate_median_spectra_by_sample %>%
-  summarize(Abs_max = max(Abs), 
+  summarize(Abs_max = max(Abs),
+            Abs_365 = Abs[round(wavelength, 1) == 364.9],
             wavelength_max = mean(wavelength[Abs == Abs_max]))
 
 # adding spectral data to the main dataset
@@ -64,28 +67,33 @@ citrate_by_sample_abs <- citrate_median_spectra_by_sample %>%
 glucose_full <- merge(glucose, citrate_by_sample_abs, by.x="id", by.y="sample_id", all.x = TRUE)      
 write.csv(x = glucose_full, file = "glucose_full.csv")
 
-
 glucose <- glucose_full[complete.cases(glucose_full), ]
 write.csv(x = glucose, file = "glucose_for_analysis.csv")
+#=======end of the script demanding local files=======================================
 
+
+
+#=======START OF MAIN ANALYSIS========================================================
+
+#loading data 
+glucose <- read.csv("glucose_for_analysis.csv", fileEncoding="UTF-8-BOM", na.strings = "n/a")
 
 # a function to encode factorial variables into the [-1, 1] range
 encode_var = function(x) {
   coded <- 2 * (x - mean(x)) / (max(x) - min(x))
 }
 
-# a dataset of coded variables for ANOVA
+# preparing dataset with coded variables for ANOVA
 glucose_coded <- glucose %>%
   mutate(concentration = encode_var(concentration),
          duration = encode_var(duration),
-         pH = encode_var(pH),
+         pH = encode_var(trunc(pH)),
          temperature = encode_var(temperature)) 
 write.csv(x = glucose_coded, file = "glucose_for_analysis_coded.csv")
 
 
 
 #==============EFFECT OF VOLUME========================================
-
 # v_eff is a dataset for testing the effect of volume
 v_eff <- glucose %>%
   mutate(volume_test = NA)
@@ -111,7 +119,6 @@ for (i in 1:nrow(v_eff)) {
 v_eff <- v_eff[!(is.na(v_eff$volume_test)), ] %>%
   subset(select = c("id", "temperature", "duration", "pH", "concentration", "volume", "yield_total", "yield_filtrate", "pH_final", "conc_filtrate", "Abs_max"))
 
-
 # cross-join of the 'paired' samples differing only in volume
 # '.x' corresponds to 5-mL reactors
 # '.y' corresponds to 10-mL reactors
@@ -124,7 +131,6 @@ v_eff <- merge(v_eff[v_eff$volume == 5, ],
          pH_final_diff = pH_final.x - pH_final.y,
          conc_filtrate_diff = conc_filtrate.x - conc_filtrate.y,
          Abs_max_diff = Abs_max.x - Abs_max.y)
-  
 
 # long-format dataset of the variables scaled by SD for creating boxplot
 v_eff_plot <- v_eff[, 19:23] %>%
@@ -132,6 +138,7 @@ v_eff_plot <- v_eff[, 19:23] %>%
   as.data.frame() %>%
   gather(key = variable, value = value, factor_key=TRUE)
 
+# boxplot for the distribution of the variables to assess the effect of reactor volume
 ggplot(data = v_eff_plot) +
   geom_hline(yintercept = 0, colour = "red") +
   geom_boxplot(aes(x=variable, y=value)) +
@@ -142,17 +149,17 @@ ggplot(data = v_eff_plot) +
                               'Final pH', 
                               'Filtrate\nconcentration', 
                               'Maximum\nabsorbance'))
-  
 
 summary(v_eff$yield_filtrate_diff)
 
+# t-tests for significance of the effect of the reactor volume
 t1 <- t.test(v_eff$yield_total.x, v_eff$yield_total.y)
 t2 <- t.test(v_eff$yield_filtrate.x, v_eff$yield_filtrate.y)
 t3 <- t.test(v_eff$pH_final.x, v_eff$pH_final.y)
 t4 <- t.test(v_eff$conc_filtrate.x, v_eff$conc_filtrate.y)
 t5 <- t.test(v_eff$Abs_max.x, v_eff$Abs_max.y)
 
-
+# table with the results of the t-test
 v_eff_result <- map_df(list(t1, t2, t3, t4, t5), tidy) %>%
   subset(select = c("estimate", "statistic", "p.value", "conf.low", "conf.high")) %>%
   as.data.frame() %>%
@@ -165,22 +172,24 @@ rownames(v_eff_result) <- c("Total yield",
                             "Absorbance in maximum")
 
 v_eff_result
-
 #==============END OF EFFECT OF VOLUME=================================
 
 
+
 #==============ANALYSIS OF YIELD=======================================
+# mean yields at 2 h treatment and 160C
 glucose_coded %>%
   filter(temperature == -1 & duration == -1) %>%
   subset(select = c(yield_total, yield_filtrate)) %>%
   apply(MARGIN = 2, mean)
 
+# mean yields at 8 h treatment and 180C
 glucose_coded %>%
   filter(temperature == 1 & duration == 1) %>%
   subset(select = c(yield_total, yield_filtrate)) %>%
   apply(MARGIN = 2, mean)
 
-
+# dataset with difference in the total yield and filtrate yield
 yield_diff <- glucose_coded %>%
   subset(select = -c(pH_final, conc_filtrate, Abs_max, wavelength_max, initial_mass)) %>%
   mutate(yield_diff = (yield_total - yield_filtrate) / yield_filtrate)
@@ -188,12 +197,14 @@ yield_diff <- glucose_coded %>%
 ggplot(data = yield_diff) +
   geom_histogram(aes(x = yield_diff), bins = 20)
 
+# selection of the outlier samples
 yield_diff_limits <- quantile(yield_diff$yield_diff, c(0.15, 0.85))
 
 yield_outliers <- yield_diff %>%
   filter(yield_diff < yield_diff_limits[1] | yield_diff > yield_diff_limits[2]) %>%
   arrange(abs(yield_diff))
 
+# plot for the total and yields marking the outliers 
 ggplot(data = glucose_coded, aes(x = yield_total, y = yield_filtrate)) +
   geom_point() +
   geom_abline(slope = 1, intercept = 0, color = "blue", size = 1) +
@@ -204,82 +215,236 @@ ggplot(data = glucose_coded, aes(x = yield_total, y = yield_filtrate)) +
   ylab(label = "Filtrate yield, %") +
   ylim(c(0, 100)) + xlim(c(0, 130))
 
+# linear full model and its summary
 model_yield_filtrate <- lm(data = glucose_coded, formula = yield_filtrate ~ concentration * duration * pH * temperature)
 Anova(model_yield_filtrate, type = "II")
 summary(model_yield_filtrate)
 
-
+# plot of the interaction of 'temperature' and 'duration' factors
 ggplot(data = glucose %>%
          filter(concentration != 7.5) %>%
          group_by(temperature, duration) %>%
-         summarize(yield_filtrate = mean(yield_filtrate))) +
-  geom_line(aes(x = temperature, y = yield_filtrate, color = factor(duration)), size = 1) +
-  geom_point(aes(x = temperature, y = yield_filtrate, color = factor(duration)), size = 4) +
+         summarize(yf_mean = mean(yield_filtrate),
+                   upper = yf_mean + qt(0.975, df = length(yield_filtrate) - 1) * sd(yield_filtrate)/sqrt(length(yield_filtrate)),
+                   lower = yf_mean - qt(0.975, df = length(yield_filtrate) - 1) * sd(yield_filtrate)/sqrt(length(yield_filtrate))),
+       aes(x = temperature, y = yf_mean)) +
+  geom_line(aes(color = factor(duration)), size = 1) +
+  geom_point(aes(color = factor(duration)), size = 4) +
+  geom_errorbar(aes(ymin = lower, ymax = upper, color = factor(duration)), width = 0.2) +
   xlab(label = "Temperature (°C)") +
   ylab(label = "Filtrate yield, %") +
   labs(color = "Duration (h)") +
   theme(legend.position = c(0.85, 0.85))
   
 
-         
+# model with only significant factors and its analysis         
 model_yield_filtrate_reduced <- lm(data = glucose_coded, 
                                    formula = yield_filtrate ~ concentration + duration + pH + temperature +
                                      duration:temperature)
 Anova(model_yield_filtrate_reduced, type = "II")
 summary(model_yield_filtrate_reduced)
 
-
-
-
+# reduced model excluding central point
 model_yield_filtrate_reduced_no_central <- lm(data = glucose_coded %>%
                                              filter(concentration != 0), 
                                    formula = yield_filtrate ~ concentration + duration + pH + temperature +
                                      duration:temperature)
 
+# mean filtrate yield in the central point
 experiment_central_yield_filtrate <- glucose_coded %>%
   filter(concentration == 0) %>%
   summarize(mean(yield_filtrate, na.rm = TRUE)) %>%
   as.numeric(.)
 
+# prediction of the filtrate yield in the central point using reduced linear model
 predicted_central_yield_filtrate <- predict(model_yield_filtrate_reduced_no_central, 
                                             new = data.frame(concentration = 0,
                                                            duration = 0,
                                                            pH = 0,
                                                            temperature = 0), interval = "prediction")
-
-
 #==============END OF ANALYSIS OF YIELD================================
 
 
 
 #==============ANALYSIS OF pH==========================================
-model_pH_final <- lm(data = glucose_coded%>%
-                       filter(volume == 10), 
+glucose_10mL <- glucose_coded %>%
+  filter(volume == 10)
+
+glucose_5mL <- glucose_coded %>%
+  filter(volume == 5)
+
+cor.test(glucose_10mL$pH_final, glucose_10mL$yield_filtrate, method = 'spearman')
+cor.test(glucose_5mL$pH_final, glucose_5mL$yield_filtrate, method = 'spearman')
+
+# plot of general relationship between the filtrate pH and the gravimetric yield
+ggplot(data = glucose_coded, aes(x = yield_filtrate, y = pH_final, color = factor(volume))) +
+  geom_point(size = 3) +
+  geom_smooth(method = "loess", se = FALSE) +
+  xlab(label = "Yield in filtrate (%)") +
+  ylab(label = "Filtrate pH") +
+  labs(color = "Reactor volume (mL)") +
+  theme(legend.position = c(0.2, 0.85))
+  
+# several plots visualizing the relasionships in separate groups of factors
+ggplot(data = glucose_10mL, aes(x = yield_filtrate, y = pH_final, color = factor(pH))) +
+  geom_point(size = 3) +
+  geom_smooth(method = "lm")
+
+ggplot(data = glucose_10mL, aes(x = yield_filtrate, y = pH_final, color = factor(concentration))) +
+  geom_point(size = 3) +
+  geom_smooth(method = "lm")
+
+ggplot(data = glucose_10mL, aes(x = yield_filtrate, y = pH_final, color = factor(duration))) +
+  geom_point(size = 3) +
+  geom_smooth(method = "lm")
+
+ggplot(data = glucose_10mL, aes(x = yield_filtrate, y = pH_final, color = factor(temperature))) +
+  geom_point(size = 3) +
+  geom_smooth(method = "lm")
+
+
+# linear full model and its summary
+model_pH_final <- lm(data = glucose_10mL, 
                      formula = pH_final ~ concentration * duration * pH * temperature)
 Anova(model_pH_final, type = "II")
 summary(model_pH_final)
 
+#linear model including only significant terms and its summary
+model_pH_final_reduced <- lm(data = glucose_10mL, 
+                     formula = pH_final ~ concentration + duration + pH + temperature +
+                       concentration:pH + duration:temperature + concentration:pH:temperature)
+Anova(model_pH_final_reduced, type = "II")
+summary(model_pH_final_reduced)
 
-model_pH_final <- lm(data = glucose_coded%>%
-                       filter(volume == 10 & pH == 0), 
-                     formula = pH_final ~ concentration * duration * temperature)
-Anova(model_pH_final, type = "II")
-summary(model_pH_final)
-
-
-model_pH_final <- lm(data = glucose_coded%>%
-                       filter(volume == 10 & pH == -1), 
-                     formula = pH_final ~ concentration * duration * temperature)
-Anova(model_pH_final, type = "II")
-summary(model_pH_final)
-
-
-model_pH_final <- lm(data = glucose_coded%>%
-                       filter(volume == 10 & pH == 1), 
-                     formula = pH_final ~ concentration * duration * temperature)
-Anova(model_pH_final, type = "II")
-summary(model_pH_final)
+# plot of the interaction of 'temperature' and 'duration' factors
+ggplot(data = glucose %>%
+         filter(concentration != 7.5 & volume ==10) %>%
+         group_by(temperature, duration) %>%
+         summarize(pH_mean = mean(pH_final),
+                   upper = pH_mean + qt(0.975, df = length(pH_final) - 1) * sd(pH_final)/sqrt(length(pH_final)),
+                   lower = pH_mean - qt(0.975, df = length(pH_final) - 1) * sd(pH_final)/sqrt(length(pH_final))),
+       aes(x = temperature, y = pH_mean)) +
+  geom_line(aes(color = factor(duration)), size = 1) +
+  geom_point(aes(color = factor(duration)), size = 4) +
+  geom_errorbar(aes(ymin = lower, ymax = upper, color = factor(duration)), width = 0.2) +
+  xlab(label = "Temperature (°C)") +
+  ylab(label = "Filtrate pH") +
+  labs(color = "Duration (h)") +
+  theme(legend.position = c(0.85, 0.85))
 #==============END OF ANALYSIS OF pH===================================
+
+
+
+#==============ANALYSIS OF ABSORBANCE==================================
+cor.test(glucose_10mL$Abs_max, glucose_10mL$yield_filtrate, method = 'spearman')
+cor.test(glucose_5mL$Abs_max, glucose_5mL$yield_filtrate, method = 'spearman')
+
+
+cor.test(glucose_10mL$Abs_max, glucose_10mL$pH_final, method = 'spearman')
+cor.test(glucose_5mL$Abs_max, glucose_5mL$pH_final, method = 'spearman')
+
+
+# linear full model and its summary
+model_Abs_max <- lm(data = glucose_10mL, 
+                     formula = Abs_max ~ concentration * duration * pH * temperature)
+Anova(model_Abs_max, type = "II")
+summary(model_Abs_max)
+
+
+model_Abs_365 <- lm(data = glucose_10mL, 
+                    formula = Abs_365 ~ concentration * duration * pH * temperature)
+Anova(model_Abs_365, type = "II")
+summary(model_Abs_365)
+
+
+
+temp_2 <- citrate_median_spectra_by_sample %>%
+  group_by(sample_id) %>%
+  summarize(peak = max(Abs))
+
+temp <- merge(citrate_median_spectra_by_sample, temp_2, by = 'sample_id') %>%
+  mutate(Abs_norm = Abs / peak)
+
+ggplot(data = temp, aes(x = wavelength, y = Abs_norm, color = sample_id)) +
+  geom_point()
+
+
+
+
+
+
+
+
+temp <- merge(citrate_median_spectra_by_sample, glucose, by.x="sample_id", by.y="id", all.x = TRUE)
+temp$Abs <- temp$Abs / (temp$initial_mass * temp$concentration)
+
+citrate_median_spectra_by_composition <- temp %>%
+  group_by(concentration, duration, pH, temperature, wavelength) %>%
+  summarize(Abs = median(Abs))
+
+citrate_median_spectra_by_composition$conditions <- paste0("pH_", citrate_median_spectra_by_composition$pH, " ",
+                                                           "c_", citrate_median_spectra_by_composition$concentration, " ",
+                                                           "t_", citrate_median_spectra_by_composition$duration, " ",
+                                                           "T_", citrate_median_spectra_by_composition$temperature)
+
+ggplot() +
+  geom_line(data=citrate_median_spectra_by_composition, aes(x=wavelength, y=Abs, color=conditions))
+
+
+ggplot() +
+  geom_line(data=citrate_median_spectra_by_composition[citrate_median_spectra_by_composition$pH == 3, ], 
+            aes(x=wavelength, y=Abs, color=conditions))
+
+
+ggplot() +
+  geom_line(data=citrate_median_spectra_by_composition[citrate_median_spectra_by_composition$pH == 6, ], 
+            aes(x=wavelength, y=Abs, color=conditions))
+
+
+citrate_samples_reduced_by_composition <- citrate_median_spectra_by_composition %>%
+  group_by(conditions) %>%
+  mutate(Abs = Abs / max(Abs))
+
+ggplot() +
+  geom_line(data=citrate_samples_reduced_by_composition, aes(x=wavelength, y=Abs, color=conditions))
+
+ggplot() +
+  geom_line(data=citrate_samples_reduced_by_composition[citrate_samples_reduced_by_composition$wavelength < 300, ],
+            aes(x=wavelength, y=Abs, color=conditions))
+
+
+
+ggplot() +
+  geom_point(data=citrate_spectra, aes(x=wavelength, y=Abs, color=sample))
+
+ggplot() +
+  geom_line(data=citrate_median_spectra, aes(x=wavelength, y=Abs, color=sample))
+
+citrate_by_sample_abs <- citrate_spectra_by_sample %>%
+  summarize(Abs = max(Abs))
+
+citrate_by_sample_abs
+
+
+
+
+
+
+
+
+# glucose_full <- merge(glucose, citrate_by_sample_abs, by.x="id", by.y="sample", all.x = TRUE)      
+
+# write.csv(x = glucose_full, file = "glucose_analysis_full.csv")
+
+ggplot() +
+  geom_point(data=glucose, aes(x=conc_filtrate, y=Abs_max, color=factor(volume)))
+
+
+ggplot() +
+  geom_point(data=glucose, aes(x=yield_filtrate, y=Abs_max, color=factor(volume)))
+
+
+#==============END OF ANALYSIS OF ABSORBANCE===========================
 
 
 
@@ -400,70 +565,6 @@ ggplot() +
 
 
 
-
-temp <- merge(citrate_median_spectra_by_sample, glucose, by.x="sample_id", by.y="id", all.x = TRUE)
-temp$Abs <- temp$Abs / (temp$initial_mass * temp$concentration)
-
-citrate_median_spectra_by_composition <- temp %>%
-  group_by(concentration, duration, pH, temperature, wavelength) %>%
-  summarize(Abs = median(Abs))
-
-citrate_median_spectra_by_composition$conditions <- paste0("pH_", citrate_median_spectra_by_composition$pH, " ",
-                                                           "c_", citrate_median_spectra_by_composition$concentration, " ",
-                                                           "t_", citrate_median_spectra_by_composition$duration, " ",
-                                                           "T_", citrate_median_spectra_by_composition$temperature)
-
-ggplot() +
-  geom_line(data=citrate_median_spectra_by_composition, aes(x=wavelength, y=Abs, color=conditions))
-
-
-ggplot() +
-  geom_line(data=citrate_median_spectra_by_composition[citrate_median_spectra_by_composition$pH == 3, ], 
-            aes(x=wavelength, y=Abs, color=conditions))
-
-
-ggplot() +
-  geom_line(data=citrate_median_spectra_by_composition[citrate_median_spectra_by_composition$pH == 6, ], 
-            aes(x=wavelength, y=Abs, color=conditions))
-
-
-citrate_samples_reduced_by_composition <- citrate_median_spectra_by_composition %>%
-  group_by(conditions) %>%
-  mutate(Abs = Abs / max(Abs))
-
-ggplot() +
-  geom_line(data=citrate_samples_reduced_by_composition, aes(x=wavelength, y=Abs, color=conditions))
-
-ggplot() +
-  geom_line(data=citrate_samples_reduced_by_composition[citrate_samples_reduced_by_composition$wavelength < 300, ],
-            aes(x=wavelength, y=Abs, color=conditions))
-
-
-
-ggplot() +
-  geom_point(data=citrate_spectra, aes(x=wavelength, y=Abs, color=sample))
-
-ggplot() +
-  geom_line(data=citrate_median_spectra, aes(x=wavelength, y=Abs, color=sample))
-
-citrate_by_sample_abs <- citrate_spectra_by_sample %>%
-  summarize(Abs = max(Abs))
-
-citrate_by_sample_abs
-
-
-
-
-
-
-
-
-# glucose_full <- merge(glucose, citrate_by_sample_abs, by.x="id", by.y="sample", all.x = TRUE)      
-
-# write.csv(x = glucose_full, file = "glucose_analysis_full.csv")
-
-ggplot() +
-  geom_point(data=glucose_full, aes(x=conc_filtrate, y=Abs, color=factor(volume)))
 
 
 library(GGally)
