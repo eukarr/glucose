@@ -1,6 +1,7 @@
 library(tidyverse)
 library(broom)
-
+library(ggtext)
+library(car)
 
 #========this part of the script requires local files====================================
 #========and should not be run if 'glucose_for_analysis.csv' is available================
@@ -48,6 +49,10 @@ for (i in 1:length(file_list)){
   citrate_spectra <- rbind(citrate_spectra, temp_data)
 }
 
+rm(temp_data)
+rm(samples)
+rm(list = c("background", "file_list", "i", "j", "sample", "samples_list_filepath", "spectrum_path"))
+
 colnames(citrate_spectra) = c("wavelength", "Abs", "spectrum", "sample_id")
 
 # for each sample, a median spectrum of 2-3 is retained
@@ -59,6 +64,11 @@ citrate_median_spectra_by_sample <- citrate_spectra %>%
 citrate_by_sample_abs <- citrate_median_spectra_by_sample %>%
   summarize(Abs_max = max(Abs),
             Abs_365 = Abs[round(wavelength, 1) == 364.9],
+            Abs_365_norm = Abs_365 / Abs_max,
+            Abs_315 = Abs[round(wavelength, 1) == 314.8],
+            Abs_315_norm = Abs_315 / Abs_max,
+            Abs_302 = Abs[round(wavelength, 1) == 302.4],
+            Abs_302_norm = Abs_315 / Abs_max,
             wavelength_max = mean(wavelength[Abs == Abs_max]))
 
 # adding spectral data to the main dataset
@@ -285,7 +295,7 @@ ggplot(data = glucose_coded, aes(x = yield_filtrate, y = pH_final, color = facto
   labs(color = "Reactor volume (mL)") +
   theme(legend.position = c(0.2, 0.85))
   
-# several plots visualizing the relasionships in separate groups of factors
+# several plots visualizing the relationships in separate groups of factors
 ggplot(data = glucose_10mL, aes(x = yield_filtrate, y = pH_final, color = factor(pH))) +
   geom_point(size = 3) +
   geom_smooth(method = "lm")
@@ -336,115 +346,1112 @@ ggplot(data = glucose %>%
 
 
 #==============ANALYSIS OF ABSORBANCE==================================
-cor.test(glucose_10mL$Abs_max, glucose_10mL$yield_filtrate, method = 'spearman')
-cor.test(glucose_5mL$Abs_max, glucose_5mL$yield_filtrate, method = 'spearman')
+# choosing a sample spectrum at 2 h and 160°C 
+glucose_coded %>%
+  filter(duration == -1 & temperature == -1 & pH == 0 & volume == 10 & concentration == 1)
+# sample 1410-3 chosen
 
+# choosing a sample spectrum at 8 h and 180°C
+glucose_coded %>%
+  filter(duration == 1 & temperature == 1 & pH == 0 & volume == 10 & concentration == 1)
+# sample 1610-8 chosen
 
-cor.test(glucose_10mL$Abs_max, glucose_10mL$pH_final, method = 'spearman')
-cor.test(glucose_5mL$Abs_max, glucose_5mL$pH_final, method = 'spearman')
+# comparison of spectra of two products differing in conversion
+ggplot(data = citrate_median_spectra_by_sample %>%
+         filter(sample_id == "1410-3" | sample_id == "1610-8"), 
+       aes(x = wavelength, y = Abs)) +
+  geom_line(aes(color = sample_id)) +
+  xlab(label = "Wavelength (nm)") +
+  ylab(label = "Absorbance") +
+  labs(color = "Preparation conditions") +
+  scale_color_discrete(labels = c('2 h at 160 °C',
+                              '8 h at 180 °C')) +
+  theme(legend.position = c(0.85, 0.85))
+  
 
-
-# linear full model and its summary
-model_Abs_max <- lm(data = glucose_10mL, 
-                     formula = Abs_max ~ concentration * duration * pH * temperature)
+# linear full model for absolute Abs_max in 10-mL reactors
+model_Abs_max <- lm(data = glucose_coded, 
+                    formula = Abs_max ~ concentration * duration * pH * temperature)
 Anova(model_Abs_max, type = "II")
 summary(model_Abs_max)
 
 
-model_Abs_365 <- lm(data = glucose_10mL, 
-                    formula = Abs_365 ~ concentration * duration * pH * temperature)
+# linear full model for Abs_max normalized to glucose loading in all reactors
+model_Abs_max <- lm(data = glucose_coded %>%
+                      mutate(c_pct = ifelse(concentration == 1, 0.10, ifelse(concentration == -1, 0.05, 0.075))), 
+                    formula = Abs_max / (initial_mass * c_pct) ~ concentration * duration * pH * temperature)
+Anova(model_Abs_max, type = "II")
+summary(model_Abs_max)
+
+
+summary(glucose_coded$Abs_max)
+
+# plot of the interaction of 'temperature' and 'duration' factors
+ggplot(data = glucose %>%
+         filter(concentration != 7.5) %>%
+         mutate(Abs_max = Abs_max / (initial_mass * concentration)) %>%
+         group_by(temperature, duration) %>%
+         summarize(Abs_max_mean = mean(Abs_max),
+                   upper = Abs_max_mean + qt(0.975, df = length(Abs_max) - 1) * sd(Abs_max)/sqrt(length(Abs_max)),
+                   lower = Abs_max_mean - qt(0.975, df = length(Abs_max) - 1) * sd(Abs_max)/sqrt(length(Abs_max))),
+       aes(x = temperature, y = Abs_max_mean)) +
+  geom_line(aes(color = factor(duration)), size = 1) +
+  geom_point(aes(color = factor(duration)), size = 4) +
+  geom_errorbar(aes(ymin = lower, ymax = upper, color = factor(duration)), width = 0.2) +
+  xlab(label = "Temperature (°C)") +
+  ylab(label = "Absorbance at maximum, normalized") +
+  labs(color = "Duration (h)") +
+  theme(legend.position = c(0.45, 0.9))
+
+
+# plot of the interaction of 'concentration' and 'duration' factors
+ggplot(data = glucose %>%
+         filter(concentration != 7.5) %>%
+         mutate(Abs_max = Abs_max / (initial_mass * concentration)) %>%
+         group_by(concentration, duration) %>%
+         summarize(Abs_max_mean = mean(Abs_max),
+                   upper = Abs_max_mean + qt(0.975, df = length(Abs_max) - 1) * sd(Abs_max)/sqrt(length(Abs_max)),
+                   lower = Abs_max_mean - qt(0.975, df = length(Abs_max) - 1) * sd(Abs_max)/sqrt(length(Abs_max))),
+       aes(x = concentration, y = Abs_max_mean)) +
+  geom_line(aes(color = factor(duration)), size = 1) +
+  geom_point(aes(color = factor(duration)), size = 4) +
+  geom_errorbar(aes(ymin = lower, ymax = upper, color = factor(duration)), width = 0.2) +
+  xlab(label = "Concentration (wt%)") +
+  ylab(label = "Absorbance at maximum, normalized") +
+  labs(color = "Duration (h)") +
+  theme(legend.position = c(0.45, 0.9))
+
+
+# linear reduced model for Abs_max normalized to glucose loading in all reactors
+model_Abs_max_red <- lm(data = glucose_coded %>%
+                      mutate(c_pct = ifelse(concentration == 1, 0.10, ifelse(concentration == -1, 0.05, 0.075))), 
+                    formula = Abs_max / (initial_mass * c_pct) ~ pH + concentration + duration * temperature + 
+                      pH:temperature + concentration:temperature + concentration:duration)
+Anova(model_Abs_max_red, type = "II")
+summary(model_Abs_max_red)
+
+# a plot to reveal the difference in absorption between samples 1410-3 and 1610-8
+ggplot(data = citrate_median_spectra_by_sample %>%
+         filter(sample_id == "1410-3" | sample_id == "1610-8") %>%
+         group_by(wavelength) %>%
+         mutate(Abs_diff = (max(Abs) - min(Abs)) / mean(Abs)), 
+       aes(x = wavelength, y = Abs_diff)) +
+  geom_point() +
+  xlab(label = "Wavelength (nm)") +
+  ylab(label = "Absorbance difference")
+
+
+# revealing the wavelength corresponding to highest between-groups difference in absorption
+Abs_sd_within <- merge(citrate_median_spectra_by_sample, 
+                     citrate_median_spectra_by_sample %>%
+                       group_by(sample_id) %>%
+                       summarize(peak = max(Abs)), 
+                     by = 'sample_id') %>%
+  mutate(Abs_norm = Abs / peak) %>%
+  filter(grepl("0311", sample_id, fixed = TRUE)) %>%
+  group_by(wavelength) %>%
+  summarise(Abs_sd = sd(Abs_norm))
+
+Abs_sd <- merge(citrate_median_spectra_by_sample, 
+              citrate_median_spectra_by_sample %>%
+                group_by(sample_id) %>%
+                summarize(peak = max(Abs)), 
+              by = 'sample_id') %>%
+  mutate(Abs_norm = Abs / peak) %>%
+  group_by(wavelength) %>%
+  summarise(Abs_sd = sd(Abs_norm)) %>%
+  mutate(sd_ratio = Abs_sd / Abs_sd_within$Abs_sd) %>%
+  filter(wavelength > 295)
+
+ggplot(data = Abs_sd, aes(x = wavelength, y = sd_ratio)) +
+  geom_line()
+
+print(c(Abs_sd$wavelength[Abs_sd$sd_ratio == max(Abs_sd$sd_ratio)], max(Abs_sd$sd_ratio)))
+
+
+
+
+# full linear models for absorption at different wavelengths
+model_Abs_302 <- lm(data = glucose_coded %>%
+                      mutate(c_pct = ifelse(concentration == 1, 0.10, ifelse(concentration == -1, 0.05, 0.075))), 
+                    formula = Abs_302 / (initial_mass * c_pct) ~ concentration * duration * pH * temperature)
+Anova(model_Abs_302, type = "II")
+summary(model_Abs_302)
+
+
+
+model_Abs_315 <- lm(data = glucose_coded %>%
+                      mutate(c_pct = ifelse(concentration == 1, 0.10, ifelse(concentration == -1, 0.05, 0.075))), 
+                    formula = Abs_315 / (initial_mass * c_pct) ~ concentration * duration * pH * temperature)
+Anova(model_Abs_315, type = "II")
+summary(model_Abs_315)
+
+
+model_Abs_365 <- lm(data = glucose_coded %>%
+                      mutate(c_pct = ifelse(concentration == 1, 0.10, ifelse(concentration == -1, 0.05, 0.075))), 
+                    formula = Abs_365 / (initial_mass * c_pct) ~ concentration * duration * pH * temperature)
 Anova(model_Abs_365, type = "II")
 summary(model_Abs_365)
 
-
-
-temp_2 <- citrate_median_spectra_by_sample %>%
-  group_by(sample_id) %>%
-  summarize(peak = max(Abs))
-
-temp <- merge(citrate_median_spectra_by_sample, temp_2, by = 'sample_id') %>%
-  mutate(Abs_norm = Abs / peak)
-
-ggplot(data = temp, aes(x = wavelength, y = Abs_norm, color = sample_id)) +
-  geom_point()
+# reduced linear model for absorption at 365 nm
+model_Abs_365_red <- lm(data = glucose_coded %>%
+                      mutate(c_pct = ifelse(concentration == 1, 0.10, ifelse(concentration == -1, 0.05, 0.075))), 
+                    formula = Abs_365 / (initial_mass * c_pct) ~ concentration * duration * temperature +
+                      pH + pH*temperature)
+Anova(model_Abs_365_red, type = "II")
+summary(model_Abs_365_red)
 
 
 
+# plot of the interaction of 'concentration' and 'duration' factors for absorption at 365 nm
+ggplot(data = glucose %>%
+         filter(concentration != 7.5) %>%
+         mutate(Abs_365 = Abs_365 / (initial_mass * concentration)) %>%
+         group_by(temperature, duration) %>%
+         summarize(Abs_365_mean = mean(Abs_365),
+                   upper = Abs_365_mean + qt(0.975, df = length(Abs_365) - 1) * sd(Abs_365)/sqrt(length(Abs_365)),
+                   lower = Abs_365_mean - qt(0.975, df = length(Abs_365) - 1) * sd(Abs_365)/sqrt(length(Abs_365))),
+       aes(x = temperature, y = Abs_365_mean)) +
+  geom_line(aes(color = factor(duration)), size = 1) +
+  geom_point(aes(color = factor(duration)), size = 4) +
+  geom_errorbar(aes(ymin = lower, ymax = upper, color = factor(duration)), width = 0.2) +
+  xlab(label = "Temperature (C)") +
+  ylab(label = "Absorbance at 365 nm, normalized") +
+  labs(color = "Duration (h)") +
+  theme(legend.position = c(0.45, 0.9))
 
 
+# plot of the interaction of 'concentration' and 'duration' factors at low concentration for absorption at 365 nm
+ggplot(data = glucose %>%
+         filter(concentration != 7.5 & concentration == 5) %>%
+         mutate(Abs_365 = Abs_365 / (initial_mass * concentration)) %>%
+         group_by(temperature, duration) %>%
+         summarize(Abs_365_mean = mean(Abs_365),
+                   upper = Abs_365_mean + qt(0.975, df = length(Abs_365) - 1) * sd(Abs_365)/sqrt(length(Abs_365)),
+                   lower = Abs_365_mean - qt(0.975, df = length(Abs_365) - 1) * sd(Abs_365)/sqrt(length(Abs_365))),
+       aes(x = temperature, y = Abs_365_mean)) +
+  geom_line(aes(color = factor(duration)), size = 1) +
+  geom_point(aes(color = factor(duration)), size = 4) +
+  geom_errorbar(aes(ymin = lower, ymax = upper, color = factor(duration)), width = 0.2) +
+  xlab(label = "Temperature (C)") +
+  ylab(label = "Absorbance at 365 nm, normalized") +
+  labs(color = "Duration (h)") +
+  theme(legend.position = c(0.45, 0.9))
+
+# plot of the interaction of 'concentration' and 'duration' factors at high concentration for absorption at 365 nm
+ggplot(data = glucose %>%
+         filter(concentration != 7.5 & concentration == 10) %>%
+         mutate(Abs_365 = Abs_365 / (initial_mass * concentration)) %>%
+         group_by(temperature, duration) %>%
+         summarize(Abs_365_mean = mean(Abs_365),
+                   upper = Abs_365_mean + qt(0.975, df = length(Abs_365) - 1) * sd(Abs_365)/sqrt(length(Abs_365)),
+                   lower = Abs_365_mean - qt(0.975, df = length(Abs_365) - 1) * sd(Abs_365)/sqrt(length(Abs_365))),
+       aes(x = temperature, y = Abs_365_mean)) +
+  geom_line(aes(color = factor(duration)), size = 1) +
+  geom_point(aes(color = factor(duration)), size = 4) +
+  geom_errorbar(aes(ymin = lower, ymax = upper, color = factor(duration)), width = 0.2) +
+  xlab(label = "Temperature (C)") +
+  ylab(label = "Absorbance at 365 nm, normalized") +
+  labs(color = "Duration (h)") +
+  theme(legend.position = c(0.45, 0.9))
 
 
+# contour plots of absorbance in response to synthesis conditions
+time_axis = seq(-1.5, 1.5, 0.1)
+temperature_axis = seq(-1.5 ,1.5, 0.1)
 
-temp <- merge(citrate_median_spectra_by_sample, glucose, by.x="sample_id", by.y="id", all.x = TRUE)
-temp$Abs <- temp$Abs / (temp$initial_mass * temp$concentration)
+response_Abs_max = function(time, temperature, pH, conc){coef(model_Abs_max_red)["(Intercept)"] + 
+    coef(model_Abs_max_red)["pH"]*pH + 
+    coef(model_Abs_max_red)["concentration"]*conc + 
+    coef(model_Abs_max_red)["duration"]*time + 
+    coef(model_Abs_max_red)["temperature"]*temperature + 
+    coef(model_Abs_max_red)["duration:temperature"]*time*temperature +
+    coef(model_Abs_max_red)["pH:temperature"]*pH*temperature +
+    coef(model_Abs_max_red)["concentration:temperature"]*conc*temperature +
+    coef(model_Abs_max_red)["concentration:duration"]*conc*time}
 
-citrate_median_spectra_by_composition <- temp %>%
-  group_by(concentration, duration, pH, temperature, wavelength) %>%
-  summarize(Abs = median(Abs))
+Abs_max_predicted <- merge(x = time_axis, y = temperature_axis, all.x=TRUE, all.y=TRUE) %>%
+  rename(duration = x, temperature = y) %>%
+  merge(y = c(-1, 0, 1)) %>%
+  rename(concentration = y) %>%
+  merge(y = c(-1, 0, 1)) %>%
+  rename(pH = y) %>%
+  mutate(Abs_max = response_Abs_max(time = duration, temperature = temperature, pH = pH, conc = concentration))
 
-citrate_median_spectra_by_composition$conditions <- paste0("pH_", citrate_median_spectra_by_composition$pH, " ",
-                                                           "c_", citrate_median_spectra_by_composition$concentration, " ",
-                                                           "t_", citrate_median_spectra_by_composition$duration, " ",
-                                                           "T_", citrate_median_spectra_by_composition$temperature)
-
-ggplot() +
-  geom_line(data=citrate_median_spectra_by_composition, aes(x=wavelength, y=Abs, color=conditions))
-
-
-ggplot() +
-  geom_line(data=citrate_median_spectra_by_composition[citrate_median_spectra_by_composition$pH == 3, ], 
-            aes(x=wavelength, y=Abs, color=conditions))
-
-
-ggplot() +
-  geom_line(data=citrate_median_spectra_by_composition[citrate_median_spectra_by_composition$pH == 6, ], 
-            aes(x=wavelength, y=Abs, color=conditions))
-
-
-citrate_samples_reduced_by_composition <- citrate_median_spectra_by_composition %>%
-  group_by(conditions) %>%
-  mutate(Abs = Abs / max(Abs))
-
-ggplot() +
-  geom_line(data=citrate_samples_reduced_by_composition, aes(x=wavelength, y=Abs, color=conditions))
-
-ggplot() +
-  geom_line(data=citrate_samples_reduced_by_composition[citrate_samples_reduced_by_composition$wavelength < 300, ],
-            aes(x=wavelength, y=Abs, color=conditions))
+ggplot(data = Abs_max_predicted, aes(x = duration, y = temperature, z = Abs_max)) +
+  geom_density_2d() +
+  geom_contour_filled() +
+  facet_grid(pH ~ concentration, labeller = label_both)
 
 
+response_Abs_365 = function(time, temperature, pH, conc){coef(model_Abs_365_red)["(Intercept)"] + 
+    coef(model_Abs_365_red)["pH"]*pH + 
+    coef(model_Abs_365_red)["concentration"]*conc + 
+    coef(model_Abs_365_red)["duration"]*time + 
+    coef(model_Abs_365_red)["temperature"]*temperature + 
+    coef(model_Abs_365_red)["duration:temperature"]*time*temperature +
+    coef(model_Abs_365_red)["temperature:pH"]*pH*temperature +
+    coef(model_Abs_365_red)["concentration:temperature"]*conc*temperature +
+    coef(model_Abs_365_red)["concentration:duration"]*conc*time +
+    coef(model_Abs_365_red)["concentration:duration:temperature"]*conc*time*temperature}
 
-ggplot() +
-  geom_point(data=citrate_spectra, aes(x=wavelength, y=Abs, color=sample))
+Abs_365_predicted <- merge(x = time_axis, y = temperature_axis, all.x=TRUE, all.y=TRUE) %>%
+  rename(duration = x, temperature = y) %>%
+  merge(y = c(-1, 0, 1)) %>%
+  rename(concentration = y) %>%
+  merge(y = c(-1, 0, 1)) %>%
+  rename(pH = y) %>%
+  mutate(Abs_max = response_Abs_365(time = duration, temperature = temperature, pH = 0, conc = concentration))
 
-ggplot() +
-  geom_line(data=citrate_median_spectra, aes(x=wavelength, y=Abs, color=sample))
-
-citrate_by_sample_abs <- citrate_spectra_by_sample %>%
-  summarize(Abs = max(Abs))
-
-citrate_by_sample_abs
-
-
-
-
-
-
-
-
-# glucose_full <- merge(glucose, citrate_by_sample_abs, by.x="id", by.y="sample", all.x = TRUE)      
-
-# write.csv(x = glucose_full, file = "glucose_analysis_full.csv")
-
-ggplot() +
-  geom_point(data=glucose, aes(x=conc_filtrate, y=Abs_max, color=factor(volume)))
+ggplot(data = Abs_365_predicted, aes(x = duration, y = temperature, z = Abs_max)) +
+  geom_density_2d() +
+  geom_contour_filled() +
+  facet_grid(pH ~ concentration, labeller = label_both)
 
 
-ggplot() +
-  geom_point(data=glucose, aes(x=yield_filtrate, y=Abs_max, color=factor(volume)))
-
-
+# linear model with absorption band maximum position as response variable
+model_wl_max <- lm(data = glucose_coded, 
+                   formula = wavelength_max ~ concentration * duration * pH * temperature)
+Anova(model_wl_max, type = "II")
+summary(model_wl_max)
 #==============END OF ANALYSIS OF ABSORBANCE===========================
+
+
+
+#==============ANALYSIS OF DATASET SIZE================================
+Abs_365_ratio_ref <- glucose_coded %>%
+  select(id, concentration, duration, pH, temperature, Abs_365_norm) %>%
+  rename(response = Abs_365_norm)
+
+model_Abs_365_ratio_ref <- lm(data = Abs_365_ratio_ref, 
+                        formula = response ~ concentration * duration * pH * temperature)
+Anova(model_Abs_365_ratio_ref, type = "II")
+summary(model_Abs_365_ratio_ref)
+
+# this function creates a dataframe with 'repl' replicates at each experimental point 
+# and 'repl_c' replicates of the central point
+subset_empty <- function(repl, repl_c){
+  single_replicate <- merge(x = c(-1, 1), y = c(-1, 1), all.x=TRUE, all.y=TRUE) %>%
+    rename(temperature = x, duration = y) %>%
+    merge(y = c(-1, 1), all.x=TRUE, all.y=TRUE) %>%
+    rename(concentration = y) %>%
+    merge(y = c(-1, 0, 1), all.x=TRUE, all.y=TRUE) %>%
+    rename(pH = y) %>%
+    mutate(response = NA)
+  
+  res <- NULL
+  
+  for (i in 1:repl){
+    res <- rbind(res, single_replicate)
+  }
+  
+  for (i in 1:repl_c){
+    res <- rbind(res, data.frame(temperature = 0, duration = 0, concentration = 0, pH = 0, response = NA))
+  }
+  
+  return(res)
+}
+
+
+
+# sampling the reference dataframe to fill the 'df' subset with response values
+subset_sample <- function(df, ref, mult_sample = FALSE) {
+  
+  for (i in 1:nrow(df)){
+    sample_row <- ref %>%
+      filter(duration == df$duration[i] & 
+               temperature == df$temperature[i] &
+               pH == df$pH[i] &
+               concentration == df$concentration[i]) %>%
+      sample_n(., 1)
+    df$response[i] <- sample_row$response[1]
+    if (!mult_sample){
+      ref <- ref %>%
+        filter(id != sample_row$id[1])
+    }
+    
+  }
+  
+  return(df)
+}
+
+
+
+# df_ref is a dataframe with 'reference' results. It should include the following columns:
+# 'id', 'duration', 'temperature', 'concentration', 'pH', 'response'
+# repl is a number of replicates of each design point (1:3)
+# repl_c is a number of replicates of the central design point (1:8)
+# runs is a number of differents subsets to test the partial models
+test_subset <- function(df_ref, repl, repl_c, mult_sample = FALSE, runs, alpha = 0.05){
+  set.seed(1)
+  model <- lm(data = df_ref, 
+              formula = response ~ concentration * duration * pH * temperature)
+  
+  res_signif <- NULL
+  res_diff <- NULL
+  res_diff_signif <- NULL
+  signif_ref <- (Anova(model)["Pr(>F)"] < alpha)
+  coef_ref <- coef(model)
+  coef_ref_signif <- summary(model)[["coefficients"]][, "Pr(>|t|)"] < alpha
+  
+  for (i in 1:runs){
+    subset_empty <- subset_empty(repl = repl, repl_c = repl_c)
+    subset_filled <- subset_sample(df = subset_empty, ref = df_ref, mult_sample)
+    
+    model_sample <- lm(data = subset_filled, formula = response ~ concentration * duration * pH * temperature)
+    
+    signif_sample <- (Anova(model_sample)["Pr(>F)"] < alpha)
+    
+    res_signif <- c(res_signif, sum(signif_ref[-length(signif_ref)] == signif_sample[-length(signif_sample)]))
+    
+    coef_sample <- coef(model_sample)
+    
+    coef_diff <- mean(abs((coef_sample - coef_ref) / coef_ref))
+    coef_diff_signif <- mean(abs((coef_sample[coef_ref_signif] - coef_ref[coef_ref_signif]) / coef_ref[coef_ref_signif]))
+    
+    res_diff <- c(res_diff, coef_diff)
+    res_diff_signif <- c(res_diff_signif, coef_diff_signif)
+    
+  }
+  # res_signif is a vector with number of factors correctly recognized as significant
+  # res_diff is a vector of mean absolute difference between the model parameters
+  # res_diff_signif is the same but includes only the coefficients considered significant in the reference model
+  print(paste0("i = ", i))
+  print(table(res_signif))
+  print(median(res_diff))
+  print(median(res_diff_signif))
+  
+  return(list(res_signif, res_diff, res_diff_signif))
+}
+
+
+
+Abs_365_ratio_ref <- glucose_coded %>%
+  select(id, concentration, duration, pH, temperature, Abs_365_norm) %>%
+  rename(response = Abs_365_norm)
+
+model_Abs_365_ratio_ref <- lm(data = Abs_365_ratio_ref, 
+                              formula = response ~ concentration * duration * pH * temperature)
+Anova(model_Abs_365_ratio_ref, type = "II")
+summary(model_Abs_365_ratio_ref)
+
+set.seed(1)
+
+
+test_ratio_3_8_01 <- test_subset(df_ref = Abs_365_ratio_ref, 
+                                 repl = 3, repl_c = 8, mult_sample = TRUE, 
+                                 runs = 1000, alpha = 0.01)
+
+test_ratio_3_8_05 <- test_subset(df_ref = Abs_365_ratio_ref, 
+                              repl = 3, repl_c = 8, mult_sample = TRUE, 
+                              runs = 1000, alpha = 0.05)
+
+test_ratio_3_8_10 <- test_subset(df_ref = Abs_365_ratio_ref, 
+                                 repl = 3, repl_c = 8, mult_sample = TRUE, 
+                                 runs = 1000, alpha = 0.10)
+
+
+
+test_ratio_2_8_01 <- test_subset(df_ref = Abs_365_ratio_ref, 
+                                 repl = 2, repl_c = 8, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.01)
+
+test_ratio_2_8_05 <- test_subset(df_ref = Abs_365_ratio_ref, 
+                                 repl = 2, repl_c = 8, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.05)
+
+test_ratio_2_8_10 <- test_subset(df_ref = Abs_365_ratio_ref, 
+                                 repl = 2, repl_c = 8, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.10)
+
+
+
+test_ratio_1_8_01 <- test_subset(df_ref = Abs_365_ratio_ref, 
+                                 repl = 1, repl_c = 8, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.01)
+
+test_ratio_1_8_05 <- test_subset(df_ref = Abs_365_ratio_ref, 
+                                 repl = 1, repl_c = 8, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.05)
+
+test_ratio_1_8_10 <- test_subset(df_ref = Abs_365_ratio_ref, 
+                                 repl = 1, repl_c = 8, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.10)
+
+
+
+
+test_ratio_1_5_01 <- test_subset(df_ref = Abs_365_ratio_ref, 
+                                 repl = 1, repl_c = 5, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.01)
+
+test_ratio_1_5_05 <- test_subset(df_ref = Abs_365_ratio_ref, 
+                                 repl = 1, repl_c = 5, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.05)
+
+test_ratio_1_5_10 <- test_subset(df_ref = Abs_365_ratio_ref, 
+                                 repl = 1, repl_c = 5, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.10)
+
+
+test_ratio_1_2_01 <- test_subset(df_ref = Abs_365_ratio_ref, 
+                                 repl = 1, repl_c = 2, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.01)
+
+test_ratio_1_2_05 <- test_subset(df_ref = Abs_365_ratio_ref, 
+                                 repl = 1, repl_c = 2, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.05)
+
+test_ratio_1_2_10 <- test_subset(df_ref = Abs_365_ratio_ref, 
+                                 repl = 1, repl_c = 2, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.10)
+
+
+test_ratio_1_0_01 <- test_subset(df_ref = Abs_365_ratio_ref, 
+                                 repl = 1, repl_c = 0, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.01)
+
+test_ratio_1_0_05 <- test_subset(df_ref = Abs_365_ratio_ref, 
+                                 repl = 1, repl_c = 0, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.05)
+
+test_ratio_1_0_10 <- test_subset(df_ref = Abs_365_ratio_ref, 
+                                 repl = 1, repl_c = 0, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.10)
+
+
+Abs_365_ref <- glucose_coded %>%
+  mutate(c_pct = ifelse(concentration == 1, 0.10, ifelse(concentration == -1, 0.05, 0.075)),
+         Abs_365 = Abs_365 / (initial_mass * c_pct / 100)) %>%
+  select(id, concentration, duration, pH, temperature, Abs_365) %>%
+  rename(response = Abs_365)
+
+
+test_abs_3_8_01 <- test_subset(df_ref = Abs_365_ref, 
+                                 repl = 3, repl_c = 8, mult_sample = TRUE, 
+                                 runs = 1000, alpha = 0.01)
+
+test_abs_3_8_05 <- test_subset(df_ref = Abs_365_ref, 
+                                 repl = 3, repl_c = 8, mult_sample = TRUE, 
+                                 runs = 1000, alpha = 0.05)
+
+test_abs_3_8_10 <- test_subset(df_ref = Abs_365_ref, 
+                                 repl = 3, repl_c = 8, mult_sample = TRUE, 
+                                 runs = 1000, alpha = 0.10)
+
+
+
+test_abs_2_8_01 <- test_subset(df_ref = Abs_365_ref, 
+                                 repl = 2, repl_c = 8, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.01)
+
+test_abs_2_8_05 <- test_subset(df_ref = Abs_365_ref, 
+                                 repl = 2, repl_c = 8, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.05)
+
+test_abs_2_8_10 <- test_subset(df_ref = Abs_365_ref, 
+                                 repl = 2, repl_c = 8, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.10)
+
+
+
+test_abs_1_8_01 <- test_subset(df_ref = Abs_365_ref, 
+                                 repl = 1, repl_c = 8, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.01)
+
+test_abs_1_8_05 <- test_subset(df_ref = Abs_365_ref, 
+                                 repl = 1, repl_c = 8, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.05)
+
+test_abs_1_8_10 <- test_subset(df_ref = Abs_365_ref, 
+                                 repl = 1, repl_c = 8, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.10)
+
+
+
+
+test_abs_1_5_01 <- test_subset(df_ref = Abs_365_ref, 
+                                 repl = 1, repl_c = 5, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.01)
+
+test_abs_1_5_05 <- test_subset(df_ref = Abs_365_ref, 
+                                 repl = 1, repl_c = 5, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.05)
+
+test_abs_1_5_10 <- test_subset(df_ref = Abs_365_ref, 
+                                 repl = 1, repl_c = 5, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.10)
+
+
+test_abs_1_2_01 <- test_subset(df_ref = Abs_365_ref, 
+                                 repl = 1, repl_c = 2, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.01)
+
+test_abs_1_2_05 <- test_subset(df_ref = Abs_365_ref, 
+                                 repl = 1, repl_c = 2, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.05)
+
+test_abs_1_2_10 <- test_subset(df_ref = Abs_365_ref, 
+                                 repl = 1, repl_c = 2, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.10)
+
+
+test_abs_1_0_01 <- test_subset(df_ref = Abs_365_ref, 
+                                 repl = 1, repl_c = 0, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.01)
+
+test_abs_1_0_05 <- test_subset(df_ref = Abs_365_ref, 
+                                 repl = 1, repl_c = 0, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.05)
+
+test_abs_1_0_10 <- test_subset(df_ref = Abs_365_ref, 
+                                 repl = 1, repl_c = 0, mult_sample = FALSE, 
+                                 runs = 1000, alpha = 0.10)
+
+
+test_abs_2_5_01 <- test_subset(df_ref = Abs_365_ref, 
+                               repl = 2, repl_c = 5, mult_sample = FALSE, 
+                               runs = 1000, alpha = 0.01)
+
+test_abs_2_5_05 <- test_subset(df_ref = Abs_365_ref, 
+                               repl = 2, repl_c = 5, mult_sample = FALSE, 
+                               runs = 1000, alpha = 0.05)
+
+test_abs_2_5_10 <- test_subset(df_ref = Abs_365_ref, 
+                               repl = 2, repl_c = 5, mult_sample = FALSE, 
+                               runs = 1000, alpha = 0.10)
+
+
+test_abs_2_2_01 <- test_subset(df_ref = Abs_365_ref, 
+                               repl = 2, repl_c = 2, mult_sample = FALSE, 
+                               runs = 1000, alpha = 0.01)
+
+test_abs_2_2_05 <- test_subset(df_ref = Abs_365_ref, 
+                               repl = 2, repl_c = 2, mult_sample = FALSE, 
+                               runs = 1000, alpha = 0.05)
+
+test_abs_2_2_10 <- test_subset(df_ref = Abs_365_ref, 
+                               repl = 2, repl_c = 2, mult_sample = FALSE, 
+                               runs = 1000, alpha = 0.10)
+
+
+test_abs_2_0_01 <- test_subset(df_ref = Abs_365_ref, 
+                               repl = 2, repl_c = 0, mult_sample = FALSE, 
+                               runs = 1000, alpha = 0.01)
+
+test_abs_2_0_05 <- test_subset(df_ref = Abs_365_ref, 
+                               repl = 2, repl_c = 0, mult_sample = FALSE, 
+                               runs = 1000, alpha = 0.05)
+
+test_abs_2_0_10 <- test_subset(df_ref = Abs_365_ref, 
+                               repl = 2, repl_c = 0, mult_sample = FALSE, 
+                               runs = 1000, alpha = 0.10)
+
+
+
+
+
+temp <- test_subset(df_ref = Abs_365_ref, 
+                               repl = 3, repl_c = 8, mult_sample = FALSE, 
+                               runs = 10, alpha = 0.05)
+
+
+correct_factors_abs <- data.frame(cbind(test_abs_3_8_01[[1]], test_abs_3_8_05[[1]], test_abs_3_8_10[[1]],
+              test_abs_2_8_01[[1]], test_abs_2_8_05[[1]], test_abs_2_8_10[[1]],
+              test_abs_1_8_01[[1]], test_abs_1_8_05[[1]], test_abs_1_8_10[[1]],
+              test_abs_1_5_01[[1]], test_abs_1_5_05[[1]], test_abs_1_5_10[[1]],
+              test_abs_1_2_01[[1]], test_abs_1_2_05[[1]], test_abs_1_2_10[[1]],
+              test_abs_1_0_01[[1]], test_abs_1_0_05[[1]], test_abs_1_0_10[[1]],
+              test_abs_2_5_01[[1]], test_abs_2_5_05[[1]], test_abs_2_5_10[[1]],
+              test_abs_2_2_01[[1]], test_abs_2_2_05[[1]], test_abs_2_2_10[[1]],
+              test_abs_2_0_01[[1]], test_abs_2_0_05[[1]], test_abs_2_0_10[[1]])) %>%
+  `colnames<-`(c("abs_3_8_01", "abs_3_8_05", "abs_3_8_10",
+                 "abs_2_8_01", "abs_2_8_05", "abs_2_8_10",
+                 "abs_1_8_01", "abs_1_8_05", "abs_1_8_10",
+                 "abs_1_5_01", "abs_1_5_05", "abs_1_5_10",
+                 "abs_1_2_01", "abs_1_2_05", "abs_1_2_10",
+                 "abs_1_0_01", "abs_1_0_05", "abs_1_0_10",
+                 "abs_2_5_01", "abs_2_5_05", "abs_2_5_10",
+                 "abs_2_2_01", "abs_2_2_05", "abs_2_2_10",
+                 "abs_2_0_01", "abs_2_0_05", "abs_2_0_10")) %>%
+  pivot_longer(cols = everything(), names_to = "test", values_to = "factors") %>%
+  separate(test, c(NA, "repl", "repl_c", "alpha")) %>%
+  mutate(repl = as.numeric(repl),
+         repl_c = as.numeric(repl_c),
+         alpha = as.numeric(alpha) / 100)
+
+
+ggplot(data = correct_factors_abs %>% filter(repl_c == 8) %>%
+         mutate(replicates = factor(repl, levels = c(3, 2, 1), labels = c("3", "2", "1")))) +
+  facet_grid(rows = vars(replicates),
+             labeller = label_both,
+             scales = "free_y") +
+  geom_bar(aes(x = factors, fill = factor(alpha)), 
+           position = position_dodge(preserve = "single"), 
+           width = 0.6 ) +
+  xlim(c(6, 16)) +
+  xlab("Correctly resolved factors") +
+  theme(legend.position = c(0.15, 0.85), legend.title = element_markdown()) +
+  labs(fill = "Threshold *p*-value")
+
+
+ggplot(data = correct_factors_abs %>% filter(repl == 1) %>%
+         mutate(replicates = factor(repl_c, levels = c(8, 5, 2, 0), labels = c("8", "5", "2", "0")))) +
+  facet_grid(rows = vars(replicates),
+             labeller = label_both,
+             scales = "free_y") +
+  geom_bar(aes(x = factors, fill = factor(alpha)), 
+           position = position_dodge(preserve = "single"), 
+           width = 0.6 ) +
+  xlim(c(6, 16)) +
+  xlab("Correctly resolved factors") +
+  theme(legend.position = c(0.85, 0.9), legend.title = element_markdown()) +
+  labs(fill = "Threshold *p*-value")
+
+
+ggplot(data = correct_factors_abs %>% filter(repl == 2) %>%
+         mutate(replicates = factor(repl_c, levels = c(8, 5, 2, 0), labels = c("8", "5", "2", "0")))) +
+  facet_grid(rows = vars(replicates),
+             labeller = label_both,
+             scales = "free_y") +
+  geom_bar(aes(x = factors, fill = factor(alpha)), 
+           position = position_dodge(preserve = "single"), 
+           width = 0.6 ) +
+  xlim(c(8, 16)) +
+  xlab("Correctly resolved factors") +
+  theme(legend.position = c(0.15, 0.9), legend.title = element_markdown()) +
+  labs(fill = "Threshold *p*-value")
+
+
+
+
+mean_error_abs <- data.frame(cbind(test_abs_3_8_01[[2]], test_abs_3_8_05[[2]], test_abs_3_8_10[[2]],
+                                   test_abs_2_8_01[[2]], test_abs_2_8_05[[2]], test_abs_2_8_10[[2]],
+                                   test_abs_1_8_01[[2]], test_abs_1_8_05[[2]], test_abs_1_8_10[[2]],
+                                   test_abs_1_5_01[[2]], test_abs_1_5_05[[2]], test_abs_1_5_10[[2]],
+                                   test_abs_1_2_01[[2]], test_abs_1_2_05[[2]], test_abs_1_2_10[[2]],
+                                   test_abs_1_0_01[[2]], test_abs_1_0_05[[2]], test_abs_1_0_10[[2]],
+                                   test_abs_2_5_01[[2]], test_abs_2_5_05[[2]], test_abs_2_5_10[[2]],
+                                   test_abs_2_2_01[[2]], test_abs_2_2_05[[2]], test_abs_2_2_10[[2]],
+                                   test_abs_2_0_01[[2]], test_abs_2_0_05[[2]], test_abs_2_0_10[[2]])) %>%
+  `colnames<-`(c("abs_3_8_01", "abs_3_8_05", "abs_3_8_10",
+                 "abs_2_8_01", "abs_2_8_05", "abs_2_8_10",
+                 "abs_1_8_01", "abs_1_8_05", "abs_1_8_10",
+                 "abs_1_5_01", "abs_1_5_05", "abs_1_5_10",
+                 "abs_1_2_01", "abs_1_2_05", "abs_1_2_10",
+                 "abs_1_0_01", "abs_1_0_05", "abs_1_0_10",
+                 "abs_2_5_01", "abs_2_5_05", "abs_2_5_10",
+                 "abs_2_2_01", "abs_2_2_05", "abs_2_2_10",
+                 "abs_2_0_01", "abs_2_0_05", "abs_2_0_10")) %>%
+  pivot_longer(cols = everything(), names_to = "test", values_to = "error") %>%
+  separate(test, c(NA, "repl", "repl_c", "alpha"), remove = FALSE) %>%
+  mutate(repl = as.numeric(repl),
+         repl_c = as.numeric(repl_c),
+         alpha = as.numeric(alpha) / 100)
+
+
+ggplot(data = mean_error_abs %>% 
+         filter(alpha == 0.05 & (repl_c == 0 | repl_c == 8))) +
+  geom_violin(aes(x = test, y = error)) +
+  xlab("Subset: DR; CR") +
+  ylab("Mean relative error") +
+  scale_x_discrete(labels = c('1; 0',
+                              '1; 8',
+                              '2; 0', 
+                              '2; 8',
+                              '3; 8'))
+
+
+
+mean_error_sign_abs <- data.frame(cbind(test_abs_3_8_01[[3]], test_abs_3_8_05[[3]], test_abs_3_8_10[[3]],
+                                   test_abs_2_8_01[[3]], test_abs_2_8_05[[3]], test_abs_2_8_10[[3]],
+                                   test_abs_1_8_01[[3]], test_abs_1_8_05[[3]], test_abs_1_8_10[[3]],
+                                   test_abs_1_5_01[[3]], test_abs_1_5_05[[3]], test_abs_1_5_10[[3]],
+                                   test_abs_1_2_01[[3]], test_abs_1_2_05[[3]], test_abs_1_2_10[[3]],
+                                   test_abs_1_0_01[[3]], test_abs_1_0_05[[3]], test_abs_1_0_10[[3]],
+                                   test_abs_2_5_01[[3]], test_abs_2_5_05[[3]], test_abs_2_5_10[[3]],
+                                   test_abs_2_2_01[[3]], test_abs_2_2_05[[3]], test_abs_2_2_10[[3]],
+                                   test_abs_2_0_01[[3]], test_abs_2_0_05[[3]], test_abs_2_0_10[[3]])) %>%
+  `colnames<-`(c("abs_3_8_01", "abs_3_8_05", "abs_3_8_10",
+                 "abs_2_8_01", "abs_2_8_05", "abs_2_8_10",
+                 "abs_1_8_01", "abs_1_8_05", "abs_1_8_10",
+                 "abs_1_5_01", "abs_1_5_05", "abs_1_5_10",
+                 "abs_1_2_01", "abs_1_2_05", "abs_1_2_10",
+                 "abs_1_0_01", "abs_1_0_05", "abs_1_0_10",
+                 "abs_2_5_01", "abs_2_5_05", "abs_2_5_10",
+                 "abs_2_2_01", "abs_2_2_05", "abs_2_2_10",
+                 "abs_2_0_01", "abs_2_0_05", "abs_2_0_10")) %>%
+  pivot_longer(cols = everything(), names_to = "test", values_to = "error") %>%
+  separate(test, c(NA, "repl", "repl_c", "alpha"), remove = FALSE) %>%
+  mutate(repl = as.numeric(repl),
+         repl_c = as.numeric(repl_c),
+         alpha = as.numeric(alpha) / 100)
+
+
+ggplot(data = mean_error_sign_abs %>% 
+         filter(alpha == 0.05 & (repl_c == 0 | repl_c == 8))) +
+  geom_violin(aes(x = test, y = error)) +
+  xlab("Subset: DR; CR") +
+  ylab("Mean relative error") +
+  scale_x_discrete(labels = c('1; 0',
+                              '1; 8',
+                              '2; 0', 
+                              '2; 8',
+                              '3; 8'))
+
+
+
+
+
+
+
+
+
+
+
+
+correct_factors_ratio <- data.frame(cbind(test_ratio_3_8_01[[1]], test_ratio_3_8_05[[1]], test_ratio_3_8_10[[1]],
+                                        test_ratio_2_8_01[[1]], test_ratio_2_8_05[[1]], test_ratio_2_8_10[[1]],
+                                        test_ratio_1_8_01[[1]], test_ratio_1_8_05[[1]], test_ratio_1_8_10[[1]],
+                                        test_ratio_1_5_01[[1]], test_ratio_1_5_05[[1]], test_ratio_1_5_10[[1]],
+                                        test_ratio_1_2_01[[1]], test_ratio_1_2_05[[1]], test_ratio_1_2_10[[1]],
+                                        test_ratio_1_0_01[[1]], test_ratio_1_0_05[[1]], test_ratio_1_0_10[[1]])) %>%
+  `colnames<-`(c("ratio_3_8_01", "ratio_3_8_05", "ratio_3_8_10",
+                 "ratio_2_8_01", "ratio_2_8_05", "ratio_2_8_10",
+                 "ratio_1_8_01", "ratio_1_8_05", "ratio_1_8_10",
+                 "ratio_1_5_01", "ratio_1_5_05", "ratio_1_5_10",
+                 "ratio_1_2_01", "ratio_1_2_05", "ratio_1_2_10",
+                 "ratio_1_0_01", "ratio_1_0_05", "ratio_1_0_10")) %>%
+  pivot_longer(cols = everything(), names_to = "test", values_to = "factors") %>%
+  separate(test, c(NA, "repl", "repl_c", "alpha")) %>%
+  mutate(repl = as.numeric(repl),
+         repl_c = as.numeric(repl_c),
+         alpha = as.numeric(alpha) / 100)
+
+
+
+
+ggplot(data = correct_factors_ratio %>% filter(repl_c == 8) %>%
+         mutate(replicates = factor(repl, levels = c(3, 2, 1), labels = c("3", "2", "1")))) +
+  facet_grid(rows = vars(replicates),
+             labeller = label_both,
+             scales = "free_y") +
+  geom_bar(aes(x = factors, fill = factor(alpha)), 
+           position = position_dodge(preserve = "single"), 
+           width = 0.6 ) +
+  xlim(c(8, 16)) +
+  xlab("Correctly resolved factors") +
+  theme(legend.position = c(0.15, 0.85), legend.title = element_markdown()) +
+  labs(fill = "Threshold *p*-value")
+
+
+ggplot(data = correct_factors_ratio %>% filter(repl == 1) %>%
+         mutate(replicates = factor(repl_c, levels = c(8, 5, 2, 0), labels = c("8", "5", "2", "0")))) +
+  facet_grid(rows = vars(replicates),
+             labeller = label_both,
+             scales = "free_y") +
+  geom_bar(aes(x = factors, fill = factor(alpha)), 
+           position = position_dodge(preserve = "single"), 
+           width = 0.6 ) +
+  xlim(c(10, 16)) +
+  xlab("Correctly resolved factors") +
+  theme(legend.position = c(0.15, 0.85), legend.title = element_markdown()) +
+  labs(fill = "Threshold *p*-value")
+
+
+
+mean_error_ratio <- data.frame(cbind(test_ratio_3_8_01[[2]], test_ratio_3_8_05[[2]], test_ratio_3_8_10[[2]],
+                                   test_ratio_2_8_01[[2]], test_ratio_2_8_05[[2]], test_ratio_2_8_10[[2]],
+                                   test_ratio_1_8_01[[2]], test_ratio_1_8_05[[2]], test_ratio_1_8_10[[2]],
+                                   test_ratio_1_5_01[[2]], test_ratio_1_5_05[[2]], test_ratio_1_5_10[[2]],
+                                   test_ratio_1_2_01[[2]], test_ratio_1_2_05[[2]], test_ratio_1_2_10[[2]],
+                                   test_ratio_1_0_01[[2]], test_ratio_1_0_05[[2]], test_ratio_1_0_10[[2]])) %>%
+  `colnames<-`(c("ratio_3_8_01", "ratio_3_8_05", "ratio_3_8_10",
+                 "ratio_2_8_01", "ratio_2_8_05", "ratio_2_8_10",
+                 "ratio_1_8_01", "ratio_1_8_05", "ratio_1_8_10",
+                 "ratio_1_5_01", "ratio_1_5_05", "ratio_1_5_10",
+                 "ratio_1_2_01", "ratio_1_2_05", "ratio_1_2_10",
+                 "ratio_1_0_01", "ratio_1_0_05", "ratio_1_0_10")) %>%
+  pivot_longer(cols = everything(), names_to = "test", values_to = "error") %>%
+  separate(test, c(NA, "repl", "repl_c", "alpha"), remove = FALSE) %>%
+  mutate(repl = as.numeric(repl),
+         repl_c = as.numeric(repl_c),
+         alpha = as.numeric(alpha) / 100)
+
+
+ggplot(data = mean_error_ratio %>% 
+         filter(alpha == 0.05 & (repl_c == 0 | repl_c == 8))) +
+  geom_violin(aes(x = test, y = error)) +
+  xlab("Subset: DR; CR") +
+  ylab("Mean relative error") +
+  scale_x_discrete(labels = c('1; 0',
+                              '1; 8',
+                              '2; 8',
+                              '3; 8'))
+
+
+
+
+mean_error_sign_ratio <- data.frame(cbind(test_ratio_3_8_01[[3]], test_ratio_3_8_05[[3]], test_ratio_3_8_10[[3]],
+                                        test_ratio_2_8_01[[3]], test_ratio_2_8_05[[3]], test_ratio_2_8_10[[3]],
+                                        test_ratio_1_8_01[[3]], test_ratio_1_8_05[[3]], test_ratio_1_8_10[[3]],
+                                        test_ratio_1_5_01[[3]], test_ratio_1_5_05[[3]], test_ratio_1_5_10[[3]],
+                                        test_ratio_1_2_01[[3]], test_ratio_1_2_05[[3]], test_ratio_1_2_10[[3]],
+                                        test_ratio_1_0_01[[3]], test_ratio_1_0_05[[3]], test_ratio_1_0_10[[3]])) %>%
+  `colnames<-`(c("ratio_3_8_01", "ratio_3_8_05", "ratio_3_8_10",
+                 "ratio_2_8_01", "ratio_2_8_05", "ratio_2_8_10",
+                 "ratio_1_8_01", "ratio_1_8_05", "ratio_1_8_10",
+                 "ratio_1_5_01", "ratio_1_5_05", "ratio_1_5_10",
+                 "ratio_1_2_01", "ratio_1_2_05", "ratio_1_2_10",
+                 "ratio_1_0_01", "ratio_1_0_05", "ratio_1_0_10")) %>%
+  pivot_longer(cols = everything(), names_to = "test", values_to = "error") %>%
+  separate(test, c(NA, "repl", "repl_c", "alpha"), remove = FALSE) %>%
+  mutate(repl = as.numeric(repl),
+         repl_c = as.numeric(repl_c),
+         alpha = as.numeric(alpha) / 100)
+
+ggplot(data = mean_error_sign_ratio %>% 
+         filter(alpha == 0.05 & (repl_c == 0 | repl_c == 8))) +
+  geom_violin(aes(x = test, y = error)) +
+  xlab("Subset: DR; CR") +
+  ylab("Mean relative error") +
+  scale_x_discrete(labels = c('1; 0',
+                              '1; 8',
+                              '2; 8',
+                              '3; 8'))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+table(test_ratio_3_8[1])
+test_ratio_3_8[2]
+test_ratio_3_8[3]
+
+test_ratio_2_8 <- test_subset(df_ref = Abs_365_ratio_ref, 
+                              repl = 2, repl_c = 8, mult_sample = FALSE, 
+                              runs = 100, alpha = 0.01)
+
+
+
+temp_2 <- test_subset(df_ref = Abs_365_ratio_ref, repl = 1, repl_c = 0, runs = 100, alpha = 0.01)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#temp <- subset_empty(repl = 1, repl_c = 8)
+#temp_2 <- subset_sample(df = temp, ref = Abs_365_ratio_ref, mult_sample = FALSE)
+
+#model_Abs_365_ratio_sample <- lm(data = temp_2, 
+#                           formula = response ~ concentration * duration * pH * temperature)
+#Anova(model_Abs_365_ratio_sample, type = "II")
+#summary(model_Abs_365_ratio_sample)
+
+
+# signif_ref <- (Anova(model_Abs_365_ratio_ref)["Pr(>F)"] < 0.05)
+# signif_sample <- (Anova(model_Abs_365_ratio_sample)["Pr(>F)"] < 0.05)
+
+# sum(signif_ref[-length(signif_ref)] == signif_sample[-length(signif_sample)])
+
+# sum((Anova(model_Abs_365_ratio_ref)["Pr(>F)"] < 0.05) == (Anova(model_Abs_365_ratio_sample)["Pr(>F)"] < 0.05))
+
+
+res_signif <- NULL
+res_diff <- NULL
+res_diff_signif <- NULL
+signif_ref <- (Anova(model_Abs_365_ratio_ref)["Pr(>F)"] < 0.05)
+coef_ref <- coef(model_Abs_365_ratio_ref)
+coef_ref_signif <- summary(model_Abs_365_ratio_ref)[["coefficients"]][, "Pr(>|t|)"] < 0.05
+
+for (i in 1:10000){
+  temp <- subset_empty(repl = 1, repl_c = 3)
+  temp_2 <- subset_sample(df = temp, ref = Abs_365_ratio_ref, mult_sample = FALSE)
+  
+  model_Abs_365_ratio_sample <- lm(data = temp_2, 
+                                   formula = response ~ concentration * duration * pH * temperature)
+  
+  signif_sample <- (Anova(model_Abs_365_ratio_sample)["Pr(>F)"] < 0.05)
+  
+  res_signif <- c(res_signif, sum(signif_ref[-length(signif_ref)] == signif_sample[-length(signif_sample)]))
+  
+  coef_sample <- coef(model_Abs_365_ratio_sample)
+  
+  coef_diff <- mean(abs((coef_sample - coef_ref) / coef_ref))
+  coef_diff_signif <- mean(abs((coef_sample[coef_ref_signif] - coef_ref[coef_ref_signif]) / coef_ref[coef_ref_signif]))
+  
+  res_diff <- c(res_diff, coef_diff)
+  res_diff_signif <- c(res_diff_signif, coef_diff_signif)
+  
+  if (!(i %% 50)){
+    print(paste0("i = ", i))
+    print(table(res_signif))
+    print(median(res_diff))
+    print(median(res_diff_signif))
+  }
+}
+
+table(res_signif)
+
+
+# we will consider the absorbance at 365 nm
+Abs_365_ref <- glucose_coded %>%
+  mutate(c_pct = ifelse(concentration == 1, 0.10, ifelse(concentration == -1, 0.05, 0.075)),
+         Abs_365 = Abs_365 / (initial_mass * c_pct / 100)) %>%
+  select(id, concentration, duration, pH, temperature, Abs_365) %>%
+  rename(response = Abs_365)
+
+model_Abs_365_ref <- lm(data = Abs_365_ref, 
+                    formula = response ~ concentration * duration * pH * temperature)
+Anova(model_Abs_365_ref, type = "II")
+summary(model_Abs_365_ref)
+
+
+res_signif <- NULL
+res_diff <- NULL
+res_diff_signif <- NULL
+signif_ref <- (Anova(model_Abs_365_ref)["Pr(>F)"] < 0.05)
+coef_ref <- coef(model_Abs_365_ref)
+coef_ref_signif <- summary(model_Abs_365_ref)[["coefficients"]][, "Pr(>|t|)"] < 0.05
+
+for (i in 1:10000){
+  temp <- subset_empty(repl = 1, repl_c = 3)
+  temp_2 <- subset_sample(df = temp, ref = Abs_365_ref, mult_sample = FALSE)
+  
+  model_Abs_365_sample <- lm(data = temp_2, 
+                                   formula = response ~ concentration * duration * pH * temperature)
+  
+  signif_sample <- (Anova(model_Abs_365_sample)["Pr(>F)"] < 0.05)
+  
+  res_signif <- c(res_signif, sum(signif_ref[-length(signif_ref)] == signif_sample[-length(signif_sample)]))
+  
+  coef_sample <- coef(model_Abs_365_sample)
+  
+  coef_diff <- mean(abs((coef_sample - coef_ref) / coef_ref))
+  coef_diff_signif <- mean(abs((coef_sample[coef_ref_signif] - coef_ref[coef_ref_signif]) / coef_ref[coef_ref_signif]))
+  
+  res_diff <- c(res_diff, coef_diff)
+  res_diff_signif <- c(res_diff_signif, coef_diff_signif)
+  
+  if (!(i %% 50)){
+    print(paste0("i = ", i))
+    print(table(res_signif))
+    print(median(res_diff))
+    print(median(res_diff_signif))
+  }
+}
+
+table(res_signif)
+
+
+
+
+
+
+
+
+
+
+
+
+
+# this function creates a dataframe with 'repl' replicates at each experimental point 
+# and 'repl_c' replicates of the central point
+Abs_365_empty <- function(repl, repl_c){
+  single_replicate <- merge(x = c(-1, 1), y = c(-1, 1), all.x=TRUE, all.y=TRUE) %>%
+    rename(temperature = x, duration = y) %>%
+    merge(y = c(-1, 1), all.x=TRUE, all.y=TRUE) %>%
+    rename(concentration = y) %>%
+    merge(y = c(-1, 0, 1), all.x=TRUE, all.y=TRUE) %>%
+    rename(pH = y) %>%
+    mutate(Abs_365 = NA)
+  
+  res <- NULL
+  
+  for (i in 1:repl){
+    res <- rbind(res, single_replicate)
+  }
+  
+  for (i in 1:repl_c){
+    res <- rbind(res, data.frame(temperature = 0, duration = 0, concentration = 0, pH = 0, Abs_365 = NA))
+  }
+
+  return(res)
+}
+
+temp <- Abs_365_empty(repl = 1, repl_c = 3)
+
+# sampling the reference dataframe to fill the 'df' subset with Abs_365 values
+Abs_365_sample <- function(df, ref = Abs_365_ref, mult_sample = TRUE) {
+  Abs_set <- ref
+  
+  for (i in 1:nrow(df)){
+    sample_row <- Abs_set %>%
+      filter(duration == df$duration[i] & 
+               temperature == df$temperature[i] &
+               pH == df$pH[i] &
+               concentration == df$concentration[i]) %>%
+      sample_n(., 1)
+    df$Abs_365[i] <- sample_row$Abs_365[1]
+    if (!mult_sample){
+      Abs_set <- Abs_set %>%
+        filter(id != sample_row$id[1])
+    }
+    
+  }
+  
+  return(df)
+}
+
+temp_2 <- Abs_365_sample(df = temp, mult_sample = TRUE)
+
+model_Abs_365_sample <- lm(data = temp_2, 
+                        formula = Abs_365 ~ concentration * duration * pH * temperature)
+Anova(model_Abs_365_sample, type = "II")
+summary(model_Abs_365_sample)
+
+
+(coef(model_Abs_365_ref) - coef(model_Abs_365_sample)) < 1e-12
+
+
+
+sum(Abs_365_ref$Abs_365)
+sum(temp_2$Abs_365)
+
+#==============END OF ANALYSIS OF DATASET SIZE=========================
 
 
 
@@ -454,26 +1461,6 @@ ggplot() +
 
 
 
-model_yield_filtrate <- lm(data = glucose_coded %>%
-                             filter(concentration != 0 & duration != 0 & pH != 0 & temperature != 0),
-                           formula = yield_filtrate ~ concentration * duration * pH * temperature)
-
-Anova(model_yield_filtrate, type = "II")
-summary(model_yield_filtrate)
-
-
-
-
-model_yield_total <- lm(data = glucose_coded, formula = yield_total ~ concentration * duration * pH * temperature)
-Anova(model_yield_total, type = "II")
-summary(model_yield_total)
-
-model_yield_total <- lm(data = glucose_coded %>%
-                          filter(concentration != 0 & duration != 0 & pH != 0 & temperature != 0),
-                        formula = yield_total ~ concentration * duration * pH * temperature)
-
-Anova(model_yield_total, type = "II")
-summary(model_yield_total)
 
 
 
@@ -538,31 +1525,6 @@ glucose_pH_cv <- cv.lm(data = model_pH$model, form.lm = formula(model_pH), m = 5
 ggplot(data = glucose_pH_cv, aes(x = pH_final, y = cvpred)) +
   geom_point() + 
   geom_abline(slope = 1, intercept = 0)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-ggplot() +
-  geom_point(data=glucose_full, aes(x=conc_filtrate, y=Abs, color=factor(volume)))
-
-
-
-
 
 
 
@@ -570,42 +1532,10 @@ ggplot() +
 library(GGally)
 ggpairs(glucose_full, columns = c(8:11, 14) , ggplot2::aes(colour=factor(volume)))
 
-str(glucose_full)
 
 
-# library(tidyverse)
 library(car)
-setwd("C:/Users/Evgeny/Dropbox/R projects/CQD")
 
-glucose <- read.csv("glucose_analysis.csv", fileEncoding="UTF-8-BOM", na.strings = "n/a")
-
-str(glucose[glucose$volume == 5, ])
-
-small_reactor <- glucose[glucose$volume == 5, ]
-
-str(glucose)
-
-#encode_var = function(x) {
-#  coded <- 2 * (x - mean(x)) / (max(x) - min(x))
-#}
-
-#glucose_coded <- glucose %>%
-#  mutate(concentration = encode_var(concentration),
-#         duration = encode_var(duration),
-#         pH = encode_var(pH),
-#         temperature = encode_var(temperature)) 
-
-#write.csv(x = glucose_coded, file = "glucose_analysis_coded.csv")
-
-
-glucose_pH <- glucose_coded %>%
-  select(concentration, duration, pH, temperature, pH_final) %>%
-  filter(concentration != 0 & duration != 0 & pH != 0 & temperature != 0)
-
-
-model_pH <- lm(data = glucose_pH, formula = pH_final ~ concentration * duration * pH * temperature)
-Anova(model_pH, type = "II")
-summary(model_pH)
 
 
 library(daewr)
@@ -668,99 +1598,5 @@ ggplot(data = glucose_pH_cv, aes(x = pH_final, y = cvpred)) +
 
 
 
-
-
-model_total_yield <- lm(data = glucose, formula = yield_total ~ concentration * duration * pH * temperature)
-Anova(model_total_yield, type = "II")
-summary(model_total_yield)
-
-model_filtrate_yield <- lm(data = glucose, formula = yield_filtrate ~ concentration * duration * pH * temperature)
-Anova(model_filtrate_yield, type = "II")
-summary(model_filtrate_yield)
-
-ggplot(model_pH) + 
-  geom_point(aes(x = model_pH$model$pH_final, y = model_pH$residuals))
-
-glucose %>% group_by(pH) %>% summarize_all(mean, na.rm = TRUE)
-
-
-model_pH_main <- lm(data = glucose, formula = pH_final ~ concentration + duration + pH + temperature)
-Anova(model_pH_main, type = "II")
-summary(model_pH_main)
-
-model_total_yield_main <- lm(data = glucose, formula = yield_total ~ concentration + duration + pH + temperature)
-Anova(model_total_yield_main, type = "II")
-summary(model_total_yield_main)
-
-model_filtrate_yield_main <- lm(data = glucose, formula = yield_filtrate ~ concentration + duration + pH + temperature)
-Anova(model_filtrate_yield_main, type = "II")
-summary(model_filtrate_yield_main)
-
-glucose_average <- glucose %>% group_by(concentration, duration, pH, temperature) %>%
-  summarise(mean(pH_final), mean(yield_total), mean(yield_filtrate))
-
-model_pH_average <- lm(data = glucose_average, formula = `mean(pH_final)` ~ concentration * duration * pH * temperature)
-Anova(model_pH_average, type = "II")
-summary(model_pH_average)
-
-model_total_yield_average <- lm(data = glucose_average, formula = `mean(yield_total)` ~ concentration * duration * pH * temperature)
-Anova(model_total_yield_average, type = "II")
-summary(model_total_yield_average)
-
-model_filtrate_yield_average <- lm(data = glucose_average, formula = `mean(yield_filtrate)` ~ concentration * duration * pH * temperature)
-Anova(model_filtrate_yield_average, type = "II")
-summary(model_filtrate_yield_average)
-
-
-model_pH_average_main <- lm(data = glucose_average, formula = `mean(pH_final)` ~ concentration + duration + pH + temperature)
-Anova(model_pH_average_main, type = "II")
-summary(model_pH_average_main)
-
-model_total_yield_average_main <- lm(data = glucose_average, formula = `mean(yield_total)` ~ concentration * duration * pH * temperature)
-Anova(model_total_yield_average_main, type = "II")
-summary(model_total_yield_average_main)
-
-model_filtrate_yield_average_main <- lm(data = glucose_average, formula = `mean(yield_filtrate)` ~ concentration * duration * pH * temperature)
-Anova(model_filtrate_yield_average_main, type = "II")
-summary(model_filtrate_yield_average_main)
-
-
-model_pH_2nd <- lm(data = glucose, formula = pH_final ~ (concentration + duration + pH + temperature)^2)
-summary(model_pH_2nd)
-
-model_filtrate_yield_2nd <- lm(data = glucose, formula = yield_filtrate ~ (concentration + duration + pH + temperature)^2)
-summary(model_filtrate_yield_2nd)
-
-model_filtrate_yield_final <- lm(data = glucose, formula = yield_filtrate ~ concentration + duration + temperature+ duration:temperature + concentration:duration + concentration:temperature)
-summary(model_filtrate_yield_final)
-
-glucose_coded <- glucose %>% mutate(pH = (pH - min(pH))/(max(pH) - min(pH)),
-                                    temperature = (temperature - min(temperature))/(max(temperature) - min(temperature)),
-                                    concentration = (concentration - min(concentration))/(max(concentration) - min(concentration)),
-                                    duration = (duration - min(duration))/(max(duration) - min(duration)))
-
-model_filtrate_yield_coded_final <- lm(data = glucose_coded, formula = yield_filtrate ~ concentration + duration + temperature+ duration:temperature + concentration:duration + concentration:temperature)
-summary(model_filtrate_yield_coded_final)
-
-
-model_pH_coded_final <- lm(data = glucose_coded, formula = pH_final ~ concentration + duration + temperature+ duration:temperature + concentration:duration + concentration:temperature)
-summary(model_pH_coded_final)
-
-model_total_yield_coded_final <- lm(data = glucose_coded, formula = yield_total ~ concentration + duration + temperature+ duration:temperature + concentration:duration + concentration:temperature)
-summary(model_total_yield_coded_final)
-
-
-model_filtrate_yield_test <- lm(data = glucose_coded, formula = yield_total ~ (concentration + duration + temperature)^2)
-summary(model_filtrate_yield_test)
-
-
-
-
-
-
-
-
-
-print(object.size(dataset), standard = "legacy", units = "Mb")
 
 
