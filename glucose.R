@@ -15,7 +15,7 @@ setwd("C:/Users/Evgeny/Dropbox/_projects/CQD/glucose")
 # concentration - concentration of glucose in the reaction mixture, wt%
 # duration - synthesis duration, h
 # pH - initial pH of the reaction mixture
-# temperature - syntehsis temperature
+# temperature - syntesis temperature
 # pH_final - pH of the filtrate
 # yield_total - total yield of the product, %, including sediment
 # conc_filtrate - concentration of the filtrate, mg/g
@@ -127,7 +127,9 @@ for (i in 1:nrow(v_eff)) {
 # select the samples with at least one 'paired' counterpart
 # and subset only necessary columns
 v_eff <- v_eff[!(is.na(v_eff$volume_test)), ] %>%
-  subset(select = c("id", "temperature", "duration", "pH", "concentration", "volume", "yield_total", "yield_filtrate", "pH_final", "conc_filtrate", "Abs_max"))
+  subset(select = c("id", "initial_mass", "temperature", "duration", "pH", "concentration", "volume", "yield_total", "yield_filtrate", "pH_final", "Abs_max")) %>%
+  mutate(Abs_max_rel = Abs_max / (initial_mass * concentration),
+         pH_final_rel = pH_final / (initial_mass * concentration))
 
 # cross-join of the 'paired' samples differing only in volume
 # '.x' corresponds to 5-mL reactors
@@ -139,16 +141,18 @@ v_eff <- merge(v_eff[v_eff$volume == 5, ],
   mutate(yield_total_diff = yield_total.x - yield_total.y,
          yield_filtrate_diff = yield_filtrate.x - yield_filtrate.y,
          pH_final_diff = pH_final.x - pH_final.y,
-         conc_filtrate_diff = conc_filtrate.x - conc_filtrate.y,
-         Abs_max_diff = Abs_max.x - Abs_max.y)
+         pH_final_rel_diff = pH_final_rel.x - pH_final_rel.y,
+         Abs_max_diff = Abs_max.x - Abs_max.y,
+         Abs_max_rel_diff = Abs_max_rel.x - Abs_max_rel.y)
 
 # long-format dataset of the variables scaled by SD for creating boxplot
-v_eff_plot <- v_eff[, 19:23] %>%
+v_eff_plot <- v_eff[, 23:28] %>%
   apply(MARGIN = 2, function(x) {x / sd(x)}) %>%
   as.data.frame() %>%
   gather(key = variable, value = value, factor_key=TRUE)
 
 # boxplot for the distribution of the variables to assess the effect of reactor volume
+# Fig. 2 in the paper
 ggplot(data = v_eff_plot) +
   geom_hline(yintercept = 0, colour = "red") +
   geom_boxplot(aes(x=variable, y=value)) +
@@ -156,21 +160,35 @@ ggplot(data = v_eff_plot) +
   xlab(label = NULL) +
   scale_x_discrete(labels = c('Total yield',
                               'Filtrate yield',
-                              'Final pH', 
-                              'Filtrate\nconcentration', 
-                              'Maximum\nabsorbance'))
+                              'Final pH',
+                              'Relative\nfinal pH',
+                              'Maximum\nabsorbance',
+                              'Relative\nmaximum\nabsorbance'))
 
-summary(v_eff$yield_filtrate_diff)
+v_eff_t <- glucose %>%
+  subset(select = c("id", "concentration", "initial_mass", "volume", "yield_total", "yield_filtrate", "pH_final", "Abs_max")) %>%
+  mutate(Abs_max_rel = Abs_max / (initial_mass * concentration),
+         pH_final_rel = pH_final / (initial_mass * concentration)) %>%
+  subset(select = c("id", "volume", "yield_total", "yield_filtrate", "pH_final", "pH_final_rel", "Abs_max", "Abs_max_rel")) %>%
+  mutate(yield_total = (yield_total - mean(yield_total)) / sd(yield_total),
+         yield_filtrate = (yield_filtrate - mean(yield_filtrate)) / sd(yield_filtrate),
+         pH_final = (pH_final - mean(pH_final)) / sd(pH_final),
+         pH_final_rel = (pH_final_rel - mean(pH_final_rel)) / sd(pH_final_rel),
+         Abs_max = (Abs_max - mean(Abs_max)) / sd(Abs_max),
+         Abs_max_rel = (Abs_max_rel - mean(Abs_max_rel)) / sd(Abs_max_rel))
+
+
 
 # t-tests for significance of the effect of the reactor volume
-t1 <- t.test(v_eff$yield_total.x, v_eff$yield_total.y)
-t2 <- t.test(v_eff$yield_filtrate.x, v_eff$yield_filtrate.y)
-t3 <- t.test(v_eff$pH_final.x, v_eff$pH_final.y)
-t4 <- t.test(v_eff$conc_filtrate.x, v_eff$conc_filtrate.y)
-t5 <- t.test(v_eff$Abs_max.x, v_eff$Abs_max.y)
+t1 <- t.test(v_eff_t$yield_total[v_eff_t$volume == 5], v_eff_t$yield_total[v_eff_t$volume == 10])
+t2 <- t.test(v_eff_t$yield_filtrate[v_eff_t$volume == 5], v_eff_t$yield_filtrate[v_eff_t$volume == 10])
+t3 <- t.test(v_eff_t$pH_final[v_eff_t$volume == 5], v_eff_t$pH_final[v_eff_t$volume == 10])
+t4 <- t.test(v_eff_t$pH_final_rel[v_eff_t$volume == 5], v_eff_t$pH_final_rel[v_eff_t$volume == 10])
+t5 <- t.test(v_eff_t$Abs_max[v_eff_t$volume == 5], v_eff_t$Abs_max[v_eff_t$volume == 10])
+t6 <- t.test(v_eff_t$Abs_max_rel[v_eff_t$volume == 5], v_eff_t$Abs_max_rel[v_eff_t$volume == 10])
 
 # table with the results of the t-test
-v_eff_result <- map_df(list(t1, t2, t3, t4, t5), tidy) %>%
+v_eff_result <- map_df(list(t1, t2, t3, t4, t5, t6), tidy) %>%
   subset(select = c("estimate", "statistic", "p.value", "conf.low", "conf.high")) %>%
   as.data.frame() %>%
   signif(3)
@@ -178,15 +196,16 @@ v_eff_result <- map_df(list(t1, t2, t3, t4, t5), tidy) %>%
 rownames(v_eff_result) <- c("Total yield",
                             "Filtrate yield",
                             "Final pH",
-                            "Concentration in filtrate",
-                            "Absorbance in maximum")
+                            "Relative final pH",
+                            "Absorbance in maximum",
+                            "Relative absorbance in maximum")
 
 v_eff_result
 #==============END OF EFFECT OF VOLUME=================================
 
 
 
-#==============ANALYSIS OF YIELD=======================================
+#==============ANALYSIS OF SOLIDS YIELD================================
 # mean yields at 2 h treatment and 160C
 glucose_coded %>%
   filter(temperature == -1 & duration == -1) %>%
@@ -214,7 +233,8 @@ yield_outliers <- yield_diff %>%
   filter(yield_diff < yield_diff_limits[1] | yield_diff > yield_diff_limits[2]) %>%
   arrange(abs(yield_diff))
 
-# plot for the total and yields marking the outliers 
+# plot for the total and yields marking the outliers
+# Fig. 3 in the paper
 ggplot(data = glucose_coded, aes(x = yield_total, y = yield_filtrate)) +
   geom_point() +
   geom_abline(slope = 1, intercept = 0, color = "blue", size = 1) +
@@ -226,26 +246,11 @@ ggplot(data = glucose_coded, aes(x = yield_total, y = yield_filtrate)) +
   ylim(c(0, 100)) + xlim(c(0, 130))
 
 # linear full model and its summary
-model_yield_filtrate <- lm(data = glucose_coded, formula = yield_filtrate ~ concentration * duration * pH * temperature)
+model_yield_filtrate <- lm(data = glucose_coded, 
+                           formula = yield_filtrate ~ concentration * duration * pH * temperature)
 Anova(model_yield_filtrate, type = "II")
 summary(model_yield_filtrate)
 
-# plot of the interaction of 'temperature' and 'duration' factors
-ggplot(data = glucose %>%
-         filter(concentration != 7.5) %>%
-         group_by(temperature, duration) %>%
-         summarize(yf_mean = mean(yield_filtrate),
-                   upper = yf_mean + qt(0.975, df = length(yield_filtrate) - 1) * sd(yield_filtrate)/sqrt(length(yield_filtrate)),
-                   lower = yf_mean - qt(0.975, df = length(yield_filtrate) - 1) * sd(yield_filtrate)/sqrt(length(yield_filtrate))),
-       aes(x = temperature, y = yf_mean)) +
-  geom_line(aes(color = factor(duration)), size = 1) +
-  geom_point(aes(color = factor(duration)), size = 4) +
-  geom_errorbar(aes(ymin = lower, ymax = upper, color = factor(duration)), width = 0.2) +
-  xlab(label = "Temperature (°C)") +
-  ylab(label = "Filtrate yield, %") +
-  labs(color = "Duration (h)") +
-  theme(legend.position = c(0.85, 0.85))
-  
 
 # model with only significant factors and its analysis         
 model_yield_filtrate_reduced <- lm(data = glucose_coded, 
@@ -253,6 +258,25 @@ model_yield_filtrate_reduced <- lm(data = glucose_coded,
                                      duration:temperature)
 Anova(model_yield_filtrate_reduced, type = "II")
 summary(model_yield_filtrate_reduced)
+
+
+
+# checking the residuals of the reduced model
+model_yield_filtrate_reduced_res <- data.frame(residual = model_yield_filtrate_reduced$residuals,
+                                       measured = model_yield_filtrate_reduced[["model"]][["yield_filtrate"]],
+                                       fitted = model_yield_filtrate_reduced$fitted.values)
+
+ggplot(data = model_yield_filtrate_reduced_res) +
+  geom_point(aes(x = measured, y = fitted)) +
+  geom_abline(slope = 1, intercept = 0, color = "blue", size = 1)
+
+ggplot(data = model_yield_filtrate_reduced_res, aes(x = residual)) +
+  geom_histogram(aes(y = stat(density)), bins = 15) +
+  geom_density(adjust = 2, color = "red", size = 1)
+
+ggplot(data = model_yield_filtrate_reduced_res) +
+  geom_point(aes(x = measured, y = residual))
+
 
 # reduced model excluding central point
 model_yield_filtrate_reduced_no_central <- lm(data = glucose_coded %>%
@@ -272,6 +296,23 @@ predicted_central_yield_filtrate <- predict(model_yield_filtrate_reduced_no_cent
                                                            duration = 0,
                                                            pH = 0,
                                                            temperature = 0), interval = "prediction")
+
+
+# plot of the interaction of 'temperature' and 'duration' factors
+ggplot(data = glucose %>%
+         filter(concentration != 7.5) %>%
+         group_by(temperature, duration) %>%
+         summarize(yf_mean = mean(yield_filtrate),
+                   upper = yf_mean + qt(0.975, df = length(yield_filtrate) - 1) * sd(yield_filtrate)/sqrt(length(yield_filtrate)),
+                   lower = yf_mean - qt(0.975, df = length(yield_filtrate) - 1) * sd(yield_filtrate)/sqrt(length(yield_filtrate))),
+       aes(x = temperature, y = yf_mean)) +
+  geom_line(aes(color = factor(duration)), size = 1) +
+  geom_point(aes(color = factor(duration)), size = 4) +
+  geom_errorbar(aes(ymin = lower, ymax = upper, color = factor(duration)), width = 0.2) +
+  xlab(label = "Temperature (°C)") +
+  ylab(label = "Filtrate yield, %") +
+  labs(color = "Duration (h)") +
+  theme(legend.position = c(0.85, 0.85))
 #==============END OF ANALYSIS OF YIELD================================
 
 
@@ -287,6 +328,7 @@ cor.test(glucose_10mL$pH_final, glucose_10mL$yield_filtrate, method = 'spearman'
 cor.test(glucose_5mL$pH_final, glucose_5mL$yield_filtrate, method = 'spearman')
 
 # plot of general relationship between the filtrate pH and the gravimetric yield
+# Fig. S2 in the paper
 ggplot(data = glucose_coded, aes(x = yield_filtrate, y = pH_final, color = factor(volume))) +
   geom_point(size = 3) +
   geom_smooth(method = "loess", se = FALSE) +
@@ -295,23 +337,6 @@ ggplot(data = glucose_coded, aes(x = yield_filtrate, y = pH_final, color = facto
   labs(color = "Reactor volume (mL)") +
   theme(legend.position = c(0.2, 0.85))
   
-# several plots visualizing the relationships in separate groups of factors
-ggplot(data = glucose_10mL, aes(x = yield_filtrate, y = pH_final, color = factor(pH))) +
-  geom_point(size = 3) +
-  geom_smooth(method = "lm")
-
-ggplot(data = glucose_10mL, aes(x = yield_filtrate, y = pH_final, color = factor(concentration))) +
-  geom_point(size = 3) +
-  geom_smooth(method = "lm")
-
-ggplot(data = glucose_10mL, aes(x = yield_filtrate, y = pH_final, color = factor(duration))) +
-  geom_point(size = 3) +
-  geom_smooth(method = "lm")
-
-ggplot(data = glucose_10mL, aes(x = yield_filtrate, y = pH_final, color = factor(temperature))) +
-  geom_point(size = 3) +
-  geom_smooth(method = "lm")
-
 
 # linear full model and its summary
 model_pH_final <- lm(data = glucose_10mL, 
@@ -325,6 +350,43 @@ model_pH_final_reduced <- lm(data = glucose_10mL,
                        concentration:pH + duration:temperature + concentration:pH:temperature)
 Anova(model_pH_final_reduced, type = "II")
 summary(model_pH_final_reduced)
+
+
+# checking the residuals of the reduced model
+model_pH_final_reduced_res <- data.frame(residual = model_pH_final_reduced$residuals,
+                                               measured = model_pH_final_reduced[["model"]][["pH_final"]],
+                                               fitted = model_pH_final_reduced$fitted.values)
+
+ggplot(data = model_pH_final_reduced_res) +
+  geom_point(aes(x = measured, y = fitted)) +
+  geom_abline(slope = 1, intercept = 0, color = "blue", size = 1)
+
+ggplot(data = model_pH_final_reduced_res, aes(x = residual)) +
+  geom_histogram(aes(y = stat(density)), bins = 15) +
+  geom_density(adjust = 2, color = "red", size = 1)
+
+ggplot(data = model_pH_final_reduced_res) +
+  geom_point(aes(x = measured, y = residual))
+
+
+# reduced model excluding central point
+model_pH_final_reduced_no_central <- lm(data = glucose_10mL %>%
+                                                filter(concentration != 0), 
+                                        formula = pH_final ~ concentration + duration + pH + temperature +
+                                          concentration:pH + duration:temperature + concentration:pH:temperature)
+
+# mean filtrate pH in the central point
+experiment_central_pH_final <- glucose_10mL %>%
+  filter(concentration == 0) %>%
+  summarize(mean(pH_final, na.rm = TRUE)) %>%
+  as.numeric(.)
+
+# prediction of the filtrate pH in the central point using reduced linear model
+predicted_central_pH_final <- predict(model_pH_final_reduced_no_central, 
+                                            new = data.frame(concentration = 0,
+                                                             duration = 0,
+                                                             pH = 0,
+                                                             temperature = 0), interval = "prediction")
 
 # plot of the interaction of 'temperature' and 'duration' factors
 ggplot(data = glucose %>%
@@ -363,17 +425,17 @@ ggplot(data = citrate_median_spectra_by_sample %>%
   geom_line(aes(color = sample_id)) +
   xlab(label = "Wavelength (nm)") +
   ylab(label = "Absorbance") +
-  labs(color = "Preparation conditions") +
+  labs(color = "Treatment conditions") +
   scale_color_discrete(labels = c('2 h at 160 °C',
                               '8 h at 180 °C')) +
   theme(legend.position = c(0.85, 0.85))
   
 
 # linear full model for absolute Abs_max in 10-mL reactors
-model_Abs_max <- lm(data = glucose_coded, 
-                    formula = Abs_max ~ concentration * duration * pH * temperature)
-Anova(model_Abs_max, type = "II")
-summary(model_Abs_max)
+#model_Abs_max <- lm(data = glucose_coded, 
+#                    formula = Abs_max ~ concentration * duration * pH * temperature)
+#Anova(model_Abs_max, type = "II")
+#summary(model_Abs_max)
 
 
 # linear full model for Abs_max normalized to glucose loading in all reactors
@@ -421,14 +483,6 @@ ggplot(data = glucose %>%
   labs(color = "Duration (h)") +
   theme(legend.position = c(0.45, 0.9))
 
-
-# linear reduced model for Abs_max normalized to glucose loading in all reactors
-model_Abs_max_red <- lm(data = glucose_coded %>%
-                      mutate(c_pct = ifelse(concentration == 1, 0.10, ifelse(concentration == -1, 0.05, 0.075))), 
-                    formula = Abs_max / (initial_mass * c_pct) ~ pH + concentration + duration * temperature + 
-                      pH:temperature + concentration:temperature + concentration:duration)
-Anova(model_Abs_max_red, type = "II")
-summary(model_Abs_max_red)
 
 # a plot to reveal the difference in absorption between samples 1410-3 and 1610-8
 ggplot(data = citrate_median_spectra_by_sample %>%
@@ -493,6 +547,60 @@ model_Abs_365 <- lm(data = glucose_coded %>%
 Anova(model_Abs_365, type = "II")
 summary(model_Abs_365)
 
+
+# linear reduced model for Abs_max normalized to glucose loading in all reactors
+model_Abs_max_red <- lm(data = glucose_coded %>%
+                          mutate(c_pct = ifelse(concentration == 1, 0.10, ifelse(concentration == -1, 0.05, 0.075))), 
+                        formula = Abs_max / (initial_mass * c_pct) ~ pH + concentration + duration * temperature + 
+                          pH:temperature + concentration:temperature + concentration:duration)
+Anova(model_Abs_max_red, type = "II")
+summary(model_Abs_max_red)
+
+# checking the residuals of the reduced model
+model_Abs_max_red_res <- data.frame(residual = model_Abs_max_red$residuals,
+                                         measured = model_Abs_max_red[["model"]][["Abs_max/(initial_mass * c_pct)"]],
+                                         fitted = model_Abs_max_red$fitted.values)
+
+ggplot(data = model_Abs_max_red_res) +
+  geom_point(aes(x = measured, y = fitted)) +
+  geom_abline(slope = 1, intercept = 0, color = "blue", size = 1)
+
+ggplot(data = model_Abs_max_red_res, aes(x = residual)) +
+  geom_histogram(aes(y = stat(density)), bins = 15) +
+  geom_density(adjust = 2, color = "red", size = 1)
+
+ggplot(data = model_Abs_max_red_res) +
+  geom_point(aes(x = measured, y = residual))
+
+
+# reduced model excluding central point
+model_Abs_max_red_no_central <- lm(data = glucose_coded %>%
+                                          filter(concentration != 0) %>%
+                                          mutate(c_pct = ifelse(concentration == 1, 0.10, 
+                                                                ifelse(concentration == -1, 0.05, 0.075))), 
+                                        formula = Abs_max / (initial_mass * c_pct) ~ pH + concentration + 
+                                          duration * temperature + 
+                                          pH:temperature + concentration:temperature + concentration:duration)
+
+# mean Abs_max in the central point
+experiment_central_Abs_max_red <- glucose_coded %>%
+  filter(concentration == 0) %>%
+  summarize(mean(Abs_max / (initial_mass * 0.075), na.rm = TRUE)) %>%
+  as.numeric(.)
+
+# prediction of the Abs_max in the central point using reduced linear model
+predicted_central_Abs_max_red <- predict(model_Abs_max_red_no_central, 
+                                      new = data.frame(concentration = 0,
+                                                       duration = 0,
+                                                       pH = 0,
+                                                       temperature = 0), interval = "prediction")
+
+
+
+
+
+
+
 # reduced linear model for absorption at 365 nm
 model_Abs_365_red <- lm(data = glucose_coded %>%
                       mutate(c_pct = ifelse(concentration == 1, 0.10, ifelse(concentration == -1, 0.05, 0.075))), 
@@ -500,6 +608,49 @@ model_Abs_365_red <- lm(data = glucose_coded %>%
                       pH + pH*temperature)
 Anova(model_Abs_365_red, type = "II")
 summary(model_Abs_365_red)
+
+# checking the residuals of the reduced model
+model_Abs_365_red_res <- data.frame(residual = model_Abs_365_red$residuals,
+                                    measured = model_Abs_365_red[["model"]][["Abs_365/(initial_mass * c_pct)"]],
+                                    fitted = model_Abs_365_red$fitted.values)
+
+ggplot(data = model_Abs_365_red_res) +
+  geom_point(aes(x = measured, y = fitted)) +
+  geom_abline(slope = 1, intercept = 0, color = "blue", size = 1)
+
+ggplot(data = model_Abs_365_red_res, aes(x = residual)) +
+  geom_histogram(aes(y = stat(density)), bins = 15) +
+  geom_density(adjust = 2, color = "red", size = 1)
+
+ggplot(data = model_Abs_365_red_res) +
+  geom_point(aes(x = measured, y = residual))
+
+
+# reduced model excluding central point
+model_Abs_365_red_no_central <- lm(data = glucose_coded %>%
+                                     filter(concentration != 0) %>%
+                                     mutate(c_pct = ifelse(concentration == 1, 0.10, 
+                                                           ifelse(concentration == -1, 0.05, 0.075))), 
+                                   formula = Abs_365 / (initial_mass * c_pct) ~ pH + pH*temperature + 
+                                     concentration * duration * temperature)
+# mean Abs_max in the central point
+experiment_central_Abs_365_red <- glucose_coded %>%
+  filter(concentration == 0) %>%
+  summarize(mean(Abs_365 / (initial_mass * 0.075), na.rm = TRUE)) %>%
+  as.numeric(.)
+
+# prediction of the Abs_max in the central point using reduced linear model
+predicted_central_Abs_365_red <- predict(model_Abs_365_red_no_central, 
+                                         new = data.frame(concentration = 0,
+                                                          duration = 0,
+                                                          pH = 0,
+                                                          temperature = 0), interval = "prediction")
+
+
+
+
+
+
 
 
 
