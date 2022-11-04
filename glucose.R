@@ -1169,8 +1169,7 @@ correct_factors_abs <- data.frame(cbind(test_abs_3_8_01[[1]], test_abs_3_8_05[[1
          repl_c = as.numeric(repl_c),
          alpha = as.numeric(alpha) / 100)
 
-
-ggplot(data = correct_factors_abs %>% filter(repl_c == 8) %>%
+fig_9a <- ggplot(data = correct_factors_abs %>% filter(repl_c == 8) %>%
          mutate(replicates = factor(repl, levels = c(3, 2, 1), labels = c("3", "2", "1")))) +
   facet_grid(rows = vars(replicates),
              labeller = label_both,
@@ -1180,7 +1179,7 @@ ggplot(data = correct_factors_abs %>% filter(repl_c == 8) %>%
            width = 0.6 ) +
   xlim(c(6, 16)) +
   xlab("Correctly resolved factors") +
-  theme(legend.position = c(0.15, 0.85), legend.title = element_markdown()) +
+  theme(legend.position = c(0.15, 0.85), legend.title = element_markdown(size = 14)) +
   labs(fill = "Threshold *p*-value")
 
 
@@ -1194,11 +1193,11 @@ ggplot(data = correct_factors_abs %>% filter(repl == 1) %>%
            width = 0.6 ) +
   xlim(c(6, 16)) +
   xlab("Correctly resolved factors") +
-  theme(legend.position = c(0.85, 0.9), legend.title = element_markdown()) +
+  theme(legend.position = c(0.80, 0.85), legend.title = element_markdown(size = 14)) +
   labs(fill = "Threshold *p*-value")
 
 
-ggplot(data = correct_factors_abs %>% filter(repl == 2) %>%
+fig_9b <- ggplot(data = correct_factors_abs %>% filter(repl == 2) %>%
          mutate(replicates = factor(repl_c, levels = c(8, 5, 2, 0), labels = c("8", "5", "2", "0")))) +
   facet_grid(rows = vars(replicates),
              labeller = label_both,
@@ -1208,7 +1207,7 @@ ggplot(data = correct_factors_abs %>% filter(repl == 2) %>%
            width = 0.6 ) +
   xlim(c(8, 16)) +
   xlab("Correctly resolved factors") +
-  theme(legend.position = c(0.15, 0.9), legend.title = element_markdown()) +
+  theme(legend.position = c(0.15, 0.85), legend.title = element_markdown(size = 14)) +
   labs(fill = "Threshold *p*-value")
 
 
@@ -1239,7 +1238,7 @@ mean_error_abs <- data.frame(cbind(test_abs_3_8_01[[2]], test_abs_3_8_05[[2]], t
          alpha = as.numeric(alpha) / 100)
 
 
-ggplot(data = mean_error_abs %>% 
+fig_9c <- ggplot(data = mean_error_abs %>% 
          filter(alpha == 0.05 & (repl_c == 0 | repl_c == 8))) +
   geom_violin(aes(x = test, y = error)) +
   xlab("Subset: DR; CR") +
@@ -1277,7 +1276,7 @@ mean_error_sign_abs <- data.frame(cbind(test_abs_3_8_01[[3]], test_abs_3_8_05[[3
          alpha = as.numeric(alpha) / 100)
 
 
-ggplot(data = mean_error_sign_abs %>% 
+fig_9d <- ggplot(data = mean_error_sign_abs %>% 
          filter(alpha == 0.05 & (repl_c == 0 | repl_c == 8))) +
   geom_violin(aes(x = test, y = error)) +
   xlab("Subset: DR; CR") +
@@ -1290,10 +1289,10 @@ ggplot(data = mean_error_sign_abs %>%
 
 
 
-
-
-
-
+ggsave("fig_9a.tiff", plot = fig_9a)
+ggsave("fig_9b.tiff", plot = fig_9b)
+ggsave("fig_9c.tiff", plot = fig_9c)
+ggsave("fig_9d.tiff", plot = fig_9d)
 
 
 
@@ -1320,7 +1319,7 @@ correct_factors_ratio <- data.frame(cbind(test_ratio_3_8_01[[1]], test_ratio_3_8
 
 
 
-ggplot(data = correct_factors_ratio %>% filter(repl_c == 8) %>%
+fig_10a <- ggplot(data = correct_factors_ratio %>% filter(repl_c == 8) %>%
          mutate(replicates = factor(repl, levels = c(3, 2, 1), labels = c("3", "2", "1")))) +
   facet_grid(rows = vars(replicates),
              labeller = label_both,
@@ -1330,11 +1329,11 @@ ggplot(data = correct_factors_ratio %>% filter(repl_c == 8) %>%
            width = 0.6 ) +
   xlim(c(8, 16)) +
   xlab("Correctly resolved factors") +
-  theme(legend.position = c(0.15, 0.85), legend.title = element_markdown()) +
+  theme(legend.position = c(0.15, 0.85), legend.title = element_markdown(size = 14)) +
   labs(fill = "Threshold *p*-value")
 
 
-ggplot(data = correct_factors_ratio %>% filter(repl == 1) %>%
+fig_10b <- ggplot(data = correct_factors_ratio %>% filter(repl == 1) %>%
          mutate(replicates = factor(repl_c, levels = c(8, 5, 2, 0), labels = c("8", "5", "2", "0")))) +
   facet_grid(rows = vars(replicates),
              labeller = label_both,
@@ -1344,7 +1343,7 @@ ggplot(data = correct_factors_ratio %>% filter(repl == 1) %>%
            width = 0.6 ) +
   xlim(c(10, 16)) +
   xlab("Correctly resolved factors") +
-  theme(legend.position = c(0.15, 0.85), legend.title = element_markdown()) +
+  theme(legend.position = c(0.15, 0.85), legend.title = element_markdown(size = 14)) +
   labs(fill = "Threshold *p*-value")
 
 
@@ -1368,7 +1367,7 @@ mean_error_ratio <- data.frame(cbind(test_ratio_3_8_01[[2]], test_ratio_3_8_05[[
          alpha = as.numeric(alpha) / 100)
 
 
-ggplot(data = mean_error_ratio %>% 
+fig_10c <- ggplot(data = mean_error_ratio %>% 
          filter(alpha == 0.05 & (repl_c == 0 | repl_c == 8))) +
   geom_violin(aes(x = test, y = error)) +
   xlab("Subset: DR; CR") +
@@ -1399,7 +1398,7 @@ mean_error_sign_ratio <- data.frame(cbind(test_ratio_3_8_01[[3]], test_ratio_3_8
          repl_c = as.numeric(repl_c),
          alpha = as.numeric(alpha) / 100)
 
-ggplot(data = mean_error_sign_ratio %>% 
+fig_10d <- ggplot(data = mean_error_sign_ratio %>% 
          filter(alpha == 0.05 & (repl_c == 0 | repl_c == 8))) +
   geom_violin(aes(x = test, y = error)) +
   xlab("Subset: DR; CR") +
@@ -1412,6 +1411,10 @@ ggplot(data = mean_error_sign_ratio %>%
 
 
 
+ggsave("fig_10a.tiff", plot = fig_10a)
+ggsave("fig_10b.tiff", plot = fig_10b)
+ggsave("fig_10c.tiff", plot = fig_10c)
+ggsave("fig_10d.tiff", plot = fig_10d)
 
 
 
